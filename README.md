@@ -10,6 +10,7 @@ Enhanced JoS scheduling for the in-tree Linux NVMe host driver.
 @BrandonPacewic
 @TSrirama2026
 @phannawich
+@CameronDilworth
 
 ### Project Partner:
 
