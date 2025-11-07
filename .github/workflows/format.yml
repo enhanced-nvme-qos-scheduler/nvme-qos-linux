@@ -2,7 +2,7 @@ name: Format
 on:
   pull_request:
     branches:
-      - mega
+      - master
 jobs:
   lint:
     runs-on: ubuntu-latest
