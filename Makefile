@@ -295,7 +295,7 @@ no-dot-config-targets := $(clean-targets) \
 			 cscope gtags TAGS tags help% %docs check% coccicheck \
 			 $(version_h) headers headers_% archheaders archscripts \
 			 %asm-generic kernelversion %src-pkg dt_binding_check \
-			 outputmakefile rustavailable rustfmt rustfmtcheck
+			 outputmakefile rustavailable rustfmt rustfmtcheck format
 no-sync-config-targets := $(no-dot-config-targets) %install modules_sign kernelrelease \
 			  image_name
 single-targets := %.a %.i %.ko %.lds %.ll %.lst %.mod %.o %.rsi %.s %/
@@ -1650,6 +1650,9 @@ board-dirs := $(sort $(notdir $(board-dirs:/=)))
 
 PHONY += help
 help:
+	@echo  'Repository-specific targets:'
+	@echo  '  format          - Run clang-format on all C headers/sources under drivers/nvme/'
+	@echo  ''
 	@echo  'Cleaning targets:'
 	@echo  '  clean		  - Remove most generated files but keep the config and'
 	@echo  '                    enough build support to build external modules'
@@ -1835,6 +1838,17 @@ rustfmt:
 
 rustfmtcheck: rustfmt_flags = --check
 rustfmtcheck: rustfmt
+
+# C formatting for NVMe driver sources
+PHONY += format
+format:
+	@command -v clang-format >/dev/null 2>&1 || { \
+		echo "clang-format not found. Please install clang-format."; \
+		exit 1; \
+	}
+	@echo "Formatting C sources in drivers/nvme/"
+	@find $(srctree)/drivers/nvme -type f \( -name '*.c' -o -name '*.h' \) -print0 \
+		| xargs -0 clang-format -i
 
 # Misc
 # ---------------------------------------------------------------------------

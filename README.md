@@ -16,6 +16,15 @@ Enhanced JoS scheduling for the in-tree Linux NVMe host driver.
 
 @godhanipayal
 
+## Code Formatting (NVMe directory)
+
+This repository adds a convenience target to format only the NVMe driver sources in `drivers/nvme/`.
+
+- Format NVMe C sources/headers
+  - Run: `make format`
+  - Scope: `drivers/nvme/**/*.c` and `drivers/nvme/**/*.h`
+  - Tooling: `clang-format` using the repository’s `.clang-format` config
+
 ## License
 
 This project copies its licensing from the Linux kernel.
