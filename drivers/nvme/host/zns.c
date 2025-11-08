@@ -9,7 +9,7 @@
 
 static int nvme_set_max_append(struct nvme_ctrl *ctrl)
 {
-	struct nvme_command c = { };
+	struct nvme_command c = {};
 	struct nvme_id_ctrl_zns *id;
 	int status;
 
@@ -36,25 +36,27 @@ static int nvme_set_max_append(struct nvme_ctrl *ctrl)
 }
 
 int nvme_query_zone_info(struct nvme_ns *ns, unsigned lbaf,
-		struct nvme_zone_info *zi)
+			 struct nvme_zone_info *zi)
 {
 	struct nvme_effects_log *log = ns->head->effects;
-	struct nvme_command c = { };
+	struct nvme_command c = {};
 	struct nvme_id_ns_zns *id;
 	int status;
 
 	/* Driver requires zone append support */
 	if ((le32_to_cpu(log->iocs[nvme_cmd_zone_append]) &
-			NVME_CMD_EFFECTS_CSUPP)) {
+	     NVME_CMD_EFFECTS_CSUPP)) {
 		if (test_and_clear_bit(NVME_NS_FORCE_RO, &ns->flags))
-			dev_warn(ns->ctrl->device,
-				 "Zone Append supported for zoned namespace:%d. Remove read-only mode\n",
-				 ns->head->ns_id);
+			dev_warn(
+				ns->ctrl->device,
+				"Zone Append supported for zoned namespace:%d. Remove read-only mode\n",
+				ns->head->ns_id);
 	} else {
 		set_bit(NVME_NS_FORCE_RO, &ns->flags);
-		dev_warn(ns->ctrl->device,
-			 "Zone Append not supported for zoned namespace:%d. Forcing to read-only mode\n",
-			 ns->head->ns_id);
+		dev_warn(
+			ns->ctrl->device,
+			"Zone Append not supported for zoned namespace:%d. Forcing to read-only mode\n",
+			ns->head->ns_id);
 	}
 
 	/* Lazily query controller append limit for the first zoned namespace */
@@ -83,8 +85,8 @@ int nvme_query_zone_info(struct nvme_ns *ns, unsigned lbaf,
 	 */
 	if (id->zoc) {
 		dev_warn(ns->ctrl->device,
-			"zone operations:%x not supported for namespace:%u\n",
-			le16_to_cpu(id->zoc), ns->head->ns_id);
+			 "zone operations:%x not supported for namespace:%u\n",
+			 le16_to_cpu(id->zoc), ns->head->ns_id);
 		status = -ENODEV;
 		goto free_data;
 	}
@@ -92,8 +94,8 @@ int nvme_query_zone_info(struct nvme_ns *ns, unsigned lbaf,
 	zi->zone_size = le64_to_cpu(id->lbafe[lbaf].zsze);
 	if (!is_power_of_2(zi->zone_size)) {
 		dev_warn(ns->ctrl->device,
-			"invalid zone size: %llu for namespace: %u\n",
-			zi->zone_size, ns->head->ns_id);
+			 "invalid zone size: %llu for namespace: %u\n",
+			 zi->zone_size, ns->head->ns_id);
 		status = -ENODEV;
 		goto free_data;
 	}
@@ -106,7 +108,7 @@ free_data:
 }
 
 void nvme_update_zone_info(struct nvme_ns *ns, struct queue_limits *lim,
-		struct nvme_zone_info *zi)
+			   struct nvme_zone_info *zi)
 {
 	lim->features |= BLK_FEAT_ZONED;
 	lim->max_open_zones = zi->max_open_zones;
@@ -130,9 +132,9 @@ static void *nvme_zns_alloc_report_buffer(struct nvme_ns *ns,
 			 get_capacity(ns->disk) >> ilog2(ns->head->zsze));
 
 	bufsize = sizeof(struct nvme_zone_report) +
-		nr_zones * sizeof(struct nvme_zone_descriptor);
-	bufsize = min_t(size_t, bufsize,
-			queue_max_hw_sectors(q) << SECTOR_SHIFT);
+		  nr_zones * sizeof(struct nvme_zone_descriptor);
+	bufsize =
+		min_t(size_t, bufsize, queue_max_hw_sectors(q) << SECTOR_SHIFT);
 	bufsize = min_t(size_t, bufsize, queue_max_segments(q) << PAGE_SHIFT);
 
 	while (bufsize >= min_bufsize) {
@@ -152,7 +154,7 @@ static int nvme_zone_parse_entry(struct nvme_ns *ns,
 				 void *data)
 {
 	struct nvme_ns_head *head = ns->head;
-	struct blk_zone zone = { };
+	struct blk_zone zone = {};
 
 	if ((entry->zt & 0xf) != NVME_ZONE_TYPE_SEQWRITE_REQ) {
 		dev_err(ns->ctrl->device, "invalid zone type %#x\n", entry->zt);
@@ -173,10 +175,10 @@ static int nvme_zone_parse_entry(struct nvme_ns *ns,
 }
 
 int nvme_ns_report_zones(struct nvme_ns *ns, sector_t sector,
-		unsigned int nr_zones, report_zones_cb cb, void *data)
+			 unsigned int nr_zones, report_zones_cb cb, void *data)
 {
 	struct nvme_zone_report *report;
-	struct nvme_command c = { };
+	struct nvme_command c = {};
 	int ret, zone_idx = 0;
 	unsigned int nz, i;
 	size_t buflen;
@@ -232,7 +234,8 @@ out_free:
 }
 
 blk_status_t nvme_setup_zone_mgmt_send(struct nvme_ns *ns, struct request *req,
-		struct nvme_command *c, enum nvme_zone_mgmt_action action)
+				       struct nvme_command *c,
+				       enum nvme_zone_mgmt_action action)
 {
 	memset(c, 0, sizeof(*c));
 

@@ -60,7 +60,7 @@ static int nvme_set_temp_thresh(struct nvme_ctrl *ctrl, int sensor, bool under,
 static int nvme_hwmon_get_smart_log(struct nvme_hwmon_data *data)
 {
 	return nvme_get_log(data->ctrl, NVME_NSID_ALL, NVME_LOG_SMART, 0,
-			   NVME_CSI_NVM, data->log, sizeof(*data->log), 0);
+			    NVME_CSI_NVM, data->log, sizeof(*data->log), 0);
 }
 
 static int nvme_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
@@ -129,16 +129,9 @@ static int nvme_hwmon_write(struct device *dev, enum hwmon_sensor_types type,
 	return -EOPNOTSUPP;
 }
 
-static const char * const nvme_hwmon_sensor_names[] = {
-	"Composite",
-	"Sensor 1",
-	"Sensor 2",
-	"Sensor 3",
-	"Sensor 4",
-	"Sensor 5",
-	"Sensor 6",
-	"Sensor 7",
-	"Sensor 8",
+static const char *const nvme_hwmon_sensor_names[] = {
+	"Composite", "Sensor 1", "Sensor 2", "Sensor 3", "Sensor 4",
+	"Sensor 5",  "Sensor 6", "Sensor 7", "Sensor 8",
 };
 
 static int nvme_hwmon_read_string(struct device *dev,
@@ -150,8 +143,8 @@ static int nvme_hwmon_read_string(struct device *dev,
 }
 
 static umode_t nvme_hwmon_is_visible(const void *_data,
-				     enum hwmon_sensor_types type,
-				     u32 attr, int channel)
+				     enum hwmon_sensor_types type, u32 attr,
+				     int channel)
 {
 	const struct nvme_hwmon_data *data = _data;
 
@@ -189,38 +182,31 @@ static umode_t nvme_hwmon_is_visible(const void *_data,
 
 static const struct hwmon_channel_info *const nvme_hwmon_info[] = {
 	HWMON_CHANNEL_INFO(chip, HWMON_C_REGISTER_TZ),
-	HWMON_CHANNEL_INFO(temp,
-			   HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN |
-				HWMON_T_CRIT | HWMON_T_LABEL | HWMON_T_ALARM,
-			   HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN |
-				HWMON_T_LABEL,
-			   HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN |
-				HWMON_T_LABEL,
-			   HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN |
-				HWMON_T_LABEL,
-			   HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN |
-				HWMON_T_LABEL,
-			   HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN |
-				HWMON_T_LABEL,
-			   HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN |
-				HWMON_T_LABEL,
-			   HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN |
-				HWMON_T_LABEL,
-			   HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN |
-				HWMON_T_LABEL),
+	HWMON_CHANNEL_INFO(
+		temp,
+		HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN | HWMON_T_CRIT |
+			HWMON_T_LABEL | HWMON_T_ALARM,
+		HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN | HWMON_T_LABEL,
+		HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN | HWMON_T_LABEL,
+		HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN | HWMON_T_LABEL,
+		HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN | HWMON_T_LABEL,
+		HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN | HWMON_T_LABEL,
+		HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN | HWMON_T_LABEL,
+		HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN | HWMON_T_LABEL,
+		HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_MIN | HWMON_T_LABEL),
 	NULL
 };
 
 static const struct hwmon_ops nvme_hwmon_ops = {
-	.is_visible	= nvme_hwmon_is_visible,
-	.read		= nvme_hwmon_read,
-	.read_string	= nvme_hwmon_read_string,
-	.write		= nvme_hwmon_write,
+	.is_visible = nvme_hwmon_is_visible,
+	.read = nvme_hwmon_read,
+	.read_string = nvme_hwmon_read_string,
+	.write = nvme_hwmon_write,
 };
 
 static const struct hwmon_chip_info nvme_hwmon_chip_info = {
-	.ops	= &nvme_hwmon_ops,
-	.info	= nvme_hwmon_info,
+	.ops = &nvme_hwmon_ops,
+	.info = nvme_hwmon_info,
 };
 
 int nvme_hwmon_init(struct nvme_ctrl *ctrl)
@@ -249,9 +235,8 @@ int nvme_hwmon_init(struct nvme_ctrl *ctrl)
 		goto err_free_log;
 	}
 
-	hwmon = hwmon_device_register_with_info(dev, "nvme",
-						data, &nvme_hwmon_chip_info,
-						NULL);
+	hwmon = hwmon_device_register_with_info(dev, "nvme", data,
+						&nvme_hwmon_chip_info, NULL);
 	if (IS_ERR(hwmon)) {
 		dev_warn(dev, "Failed to instantiate hwmon device\n");
 		err = PTR_ERR(hwmon);

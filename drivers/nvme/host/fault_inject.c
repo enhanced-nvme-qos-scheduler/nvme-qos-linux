@@ -45,7 +45,7 @@ void nvme_fault_inject_init(struct nvme_fault_inject *fault_inj,
 	/* create debugfs for status code and dont_retry */
 	fault_inj->status = NVME_SC_INVALID_OPCODE;
 	fault_inj->dont_retry = true;
-	debugfs_create_x16("status", 0600, dir,	&fault_inj->status);
+	debugfs_create_x16("status", 0600, dir, &fault_inj->status);
 	debugfs_create_bool("dont_retry", 0600, dir, &fault_inj->dont_retry);
 }
 
@@ -77,7 +77,7 @@ void nvme_should_fail(struct request *req)
 		status = fault_inject->status;
 		if (fault_inject->dont_retry)
 			status |= NVME_STATUS_DNR;
-		nvme_req(req)->status =	status;
+		nvme_req(req)->status = status;
 	}
 }
 EXPORT_SYMBOL_GPL(nvme_should_fail);

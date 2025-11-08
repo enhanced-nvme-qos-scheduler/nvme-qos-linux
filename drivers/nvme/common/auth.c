@@ -42,18 +42,17 @@ static struct nvme_auth_dhgroup_map {
 	const char name[16];
 	const char kpp[16];
 } dhgroup_map[] = {
-	[NVME_AUTH_DHGROUP_NULL] = {
-		.name = "null", .kpp = "null" },
-	[NVME_AUTH_DHGROUP_2048] = {
-		.name = "ffdhe2048", .kpp = "ffdhe2048(dh)" },
-	[NVME_AUTH_DHGROUP_3072] = {
-		.name = "ffdhe3072", .kpp = "ffdhe3072(dh)" },
-	[NVME_AUTH_DHGROUP_4096] = {
-		.name = "ffdhe4096", .kpp = "ffdhe4096(dh)" },
-	[NVME_AUTH_DHGROUP_6144] = {
-		.name = "ffdhe6144", .kpp = "ffdhe6144(dh)" },
-	[NVME_AUTH_DHGROUP_8192] = {
-		.name = "ffdhe8192", .kpp = "ffdhe8192(dh)" },
+	[NVME_AUTH_DHGROUP_NULL] = { .name = "null", .kpp = "null" },
+	[NVME_AUTH_DHGROUP_2048] = { .name = "ffdhe2048",
+				     .kpp = "ffdhe2048(dh)" },
+	[NVME_AUTH_DHGROUP_3072] = { .name = "ffdhe3072",
+				     .kpp = "ffdhe3072(dh)" },
+	[NVME_AUTH_DHGROUP_4096] = { .name = "ffdhe4096",
+				     .kpp = "ffdhe4096(dh)" },
+	[NVME_AUTH_DHGROUP_6144] = { .name = "ffdhe6144",
+				     .kpp = "ffdhe6144(dh)" },
+	[NVME_AUTH_DHGROUP_8192] = { .name = "ffdhe8192",
+				     .kpp = "ffdhe8192(dh)" },
 };
 
 const char *nvme_auth_dhgroup_name(u8 dhgroup_id)
@@ -180,14 +179,12 @@ struct nvme_dhchap_key *nvme_auth_extract_key(unsigned char *secret,
 
 	key_len = base64_decode(secret, allocated_len, key->key);
 	if (key_len < 0) {
-		pr_debug("base64 key decoding error %d\n",
-			 key_len);
+		pr_debug("base64 key decoding error %d\n", key_len);
 		ret = key_len;
 		goto out_free_secret;
 	}
 
-	if (key_len != 36 && key_len != 52 &&
-	    key_len != 68) {
+	if (key_len != 36 && key_len != 52 && key_len != 68) {
 		pr_err("Invalid key len %d\n", key_len);
 		ret = -EINVAL;
 		goto out_free_secret;
@@ -237,8 +234,8 @@ void nvme_auth_free_key(struct nvme_dhchap_key *key)
 }
 EXPORT_SYMBOL_GPL(nvme_auth_free_key);
 
-struct nvme_dhchap_key *nvme_auth_transform_key(
-		struct nvme_dhchap_key *key, char *nqn)
+struct nvme_dhchap_key *nvme_auth_transform_key(struct nvme_dhchap_key *key,
+						char *nqn)
 {
 	const char *hmac_name;
 	struct crypto_shash *key_tfm;
@@ -330,7 +327,7 @@ static int nvme_auth_hash_skey(int hmac_id, u8 *skey, size_t skey_len, u8 *hkey)
 }
 
 int nvme_auth_augmented_challenge(u8 hmac_id, u8 *skey, size_t skey_len,
-		u8 *challenge, u8 *aug, size_t hlen)
+				  u8 *challenge, u8 *aug, size_t hlen)
 {
 	struct crypto_shash *tfm;
 	u8 *hashed_key;
@@ -341,15 +338,13 @@ int nvme_auth_augmented_challenge(u8 hmac_id, u8 *skey, size_t skey_len,
 	if (!hashed_key)
 		return -ENOMEM;
 
-	ret = nvme_auth_hash_skey(hmac_id, skey,
-				  skey_len, hashed_key);
+	ret = nvme_auth_hash_skey(hmac_id, skey, skey_len, hashed_key);
 	if (ret < 0)
 		goto out_free_key;
 
 	hmac_name = nvme_auth_hmac_name(hmac_id);
 	if (!hmac_name) {
-		pr_warn("%s: invalid hash algorithm %d\n",
-			__func__, hmac_id);
+		pr_warn("%s: invalid hash algorithm %d\n", __func__, hmac_id);
 		ret = -EINVAL;
 		goto out_free_key;
 	}
@@ -385,8 +380,8 @@ int nvme_auth_gen_privkey(struct crypto_kpp *dh_tfm, u8 dh_gid)
 }
 EXPORT_SYMBOL_GPL(nvme_auth_gen_privkey);
 
-int nvme_auth_gen_pubkey(struct crypto_kpp *dh_tfm,
-		u8 *host_key, size_t host_key_len)
+int nvme_auth_gen_pubkey(struct crypto_kpp *dh_tfm, u8 *host_key,
+			 size_t host_key_len)
 {
 	struct kpp_request *req;
 	struct crypto_wait wait;
@@ -410,9 +405,9 @@ int nvme_auth_gen_pubkey(struct crypto_kpp *dh_tfm,
 }
 EXPORT_SYMBOL_GPL(nvme_auth_gen_pubkey);
 
-int nvme_auth_gen_shared_secret(struct crypto_kpp *dh_tfm,
-		u8 *ctrl_key, size_t ctrl_key_len,
-		u8 *sess_key, size_t sess_key_len)
+int nvme_auth_gen_shared_secret(struct crypto_kpp *dh_tfm, u8 *ctrl_key,
+				size_t ctrl_key_len, u8 *sess_key,
+				size_t sess_key_len)
 {
 	struct kpp_request *req;
 	struct crypto_wait wait;
@@ -486,8 +481,9 @@ EXPORT_SYMBOL_GPL(nvme_auth_generate_key);
  * Returns 0 on success with a valid generated PSK pointer in @ret_psk and
  * the length of @ret_psk in @ret_len, or a negative error number otherwise.
  */
-int nvme_auth_generate_psk(u8 hmac_id, u8 *skey, size_t skey_len,
-		u8 *c1, u8 *c2, size_t hash_len, u8 **ret_psk, size_t *ret_len)
+int nvme_auth_generate_psk(u8 hmac_id, u8 *skey, size_t skey_len, u8 *c1,
+			   u8 *c2, size_t hash_len, u8 **ret_psk,
+			   size_t *ret_len)
 {
 	struct crypto_shash *tfm;
 	SHASH_DESC_ON_STACK(shash, tfm);
@@ -500,8 +496,7 @@ int nvme_auth_generate_psk(u8 hmac_id, u8 *skey, size_t skey_len,
 
 	hmac_name = nvme_auth_hmac_name(hmac_id);
 	if (!hmac_name) {
-		pr_warn("%s: invalid hash algorithm %d\n",
-			__func__, hmac_id);
+		pr_warn("%s: invalid hash algorithm %d\n", __func__, hmac_id);
 		return -EINVAL;
 	}
 
@@ -585,7 +580,7 @@ EXPORT_SYMBOL_GPL(nvme_auth_generate_psk);
  * negative error number on failure.
  */
 int nvme_auth_generate_digest(u8 hmac_id, u8 *psk, size_t psk_len,
-		char *subsysnqn, char *hostnqn, u8 **ret_digest)
+			      char *subsysnqn, char *hostnqn, u8 **ret_digest)
 {
 	struct crypto_shash *tfm;
 	SHASH_DESC_ON_STACK(shash, tfm);
@@ -599,8 +594,7 @@ int nvme_auth_generate_digest(u8 hmac_id, u8 *psk, size_t psk_len,
 
 	hmac_name = nvme_auth_hmac_name(hmac_id);
 	if (!hmac_name) {
-		pr_warn("%s: invalid hash algorithm %d\n",
-			__func__, hmac_id);
+		pr_warn("%s: invalid hash algorithm %d\n", __func__, hmac_id);
 		return -EINVAL;
 	}
 
@@ -612,8 +606,8 @@ int nvme_auth_generate_digest(u8 hmac_id, u8 *psk, size_t psk_len,
 		hmac_len = 64;
 		break;
 	default:
-		pr_warn("%s: invalid hash algorithm '%s'\n",
-			__func__, hmac_name);
+		pr_warn("%s: invalid hash algorithm '%s'\n", __func__,
+			hmac_name);
 		return -EINVAL;
 	}
 
@@ -698,10 +692,10 @@ EXPORT_SYMBOL_GPL(nvme_auth_generate_digest);
  * Returns 0 on success with output keying material stored in @okm,
  * or a negative errno value otherwise.
  */
-static int hkdf_expand_label(struct crypto_shash *hmac_tfm,
-		const u8 *label, unsigned int labellen,
-		const u8 *context, unsigned int contextlen,
-		u8 *okm, unsigned int okmlen)
+static int hkdf_expand_label(struct crypto_shash *hmac_tfm, const u8 *label,
+			     unsigned int labellen, const u8 *context,
+			     unsigned int contextlen, u8 *okm,
+			     unsigned int okmlen)
 {
 	int err;
 	u8 *info;
@@ -764,7 +758,7 @@ static int hkdf_expand_label(struct crypto_shash *hmac_tfm,
  * error number otherwise.
  */
 int nvme_auth_derive_tls_psk(int hmac_id, u8 *psk, size_t psk_len,
-		u8 *psk_digest, u8 **ret_psk)
+			     u8 *psk_digest, u8 **ret_psk)
 {
 	struct crypto_shash *hmac_tfm;
 	const char *hmac_name;
@@ -777,13 +771,12 @@ int nvme_auth_derive_tls_psk(int hmac_id, u8 *psk, size_t psk_len,
 
 	hmac_name = nvme_auth_hmac_name(hmac_id);
 	if (!hmac_name) {
-		pr_warn("%s: invalid hash algorithm %d\n",
-			__func__, hmac_id);
+		pr_warn("%s: invalid hash algorithm %d\n", __func__, hmac_id);
 		return -EINVAL;
 	}
 	if (hmac_id == NVME_AUTH_HASH_SHA512) {
-		pr_warn("%s: unsupported hash algorithm %s\n",
-			__func__, hmac_name);
+		pr_warn("%s: unsupported hash algorithm %s\n", __func__,
+			hmac_name);
 		return -EINVAL;
 	}
 
@@ -802,8 +795,7 @@ int nvme_auth_derive_tls_psk(int hmac_id, u8 *psk, size_t psk_len,
 		ret = -EINVAL;
 		goto out_free_prk;
 	}
-	ret = hkdf_extract(hmac_tfm, psk, psk_len,
-			   default_salt, prk_len, prk);
+	ret = hkdf_extract(hmac_tfm, psk, psk_len, default_salt, prk_len, prk);
 	if (ret)
 		goto out_free_prk;
 
@@ -822,10 +814,8 @@ int nvme_auth_derive_tls_psk(int hmac_id, u8 *psk, size_t psk_len,
 		ret = -ENOMEM;
 		goto out_free_ctx;
 	}
-	ret = hkdf_expand_label(hmac_tfm,
-				label, strlen(label),
-				ctx, strlen(ctx),
-				tls_key, psk_len);
+	ret = hkdf_expand_label(hmac_tfm, label, strlen(label), ctx,
+				strlen(ctx), tls_key, psk_len);
 	if (ret) {
 		kfree(tls_key);
 		goto out_free_ctx;

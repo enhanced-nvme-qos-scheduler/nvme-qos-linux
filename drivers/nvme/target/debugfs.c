@@ -15,25 +15,29 @@
 
 static struct dentry *nvmet_debugfs;
 
-#define NVMET_DEBUGFS_ATTR(field) \
-	static int field##_open(struct inode *inode, struct file *file) \
-	{ return single_open(file, field##_show, inode->i_private); } \
-	\
-	static const struct file_operations field##_fops = { \
-		.open = field##_open, \
-		.read = seq_read, \
-		.release = single_release, \
+#define NVMET_DEBUGFS_ATTR(field)                                         \
+	static int field##_open(struct inode *inode, struct file *file)   \
+	{                                                                 \
+		return single_open(file, field##_show, inode->i_private); \
+	}                                                                 \
+                                                                          \
+	static const struct file_operations field##_fops = {              \
+		.open = field##_open,                                     \
+		.read = seq_read,                                         \
+		.release = single_release,                                \
 	}
 
-#define NVMET_DEBUGFS_RW_ATTR(field) \
-	static int field##_open(struct inode *inode, struct file *file) \
-	{ return single_open(file, field##_show, inode->i_private); } \
-	\
-	static const struct file_operations field##_fops = { \
-		.open = field##_open, \
-		.read = seq_read, \
-		.write = field##_write, \
-		.release = single_release, \
+#define NVMET_DEBUGFS_RW_ATTR(field)                                      \
+	static int field##_open(struct inode *inode, struct file *file)   \
+	{                                                                 \
+		return single_open(file, field##_show, inode->i_private); \
+	}                                                                 \
+                                                                          \
+	static const struct file_operations field##_fops = {              \
+		.open = field##_open,                                     \
+		.read = seq_read,                                         \
+		.write = field##_write,                                   \
+		.release = single_release,                                \
 	}
 
 static int nvmet_ctrl_hostnqn_show(struct seq_file *m, void *p)
@@ -64,12 +68,12 @@ static int nvmet_ctrl_port_show(struct seq_file *m, void *p)
 NVMET_DEBUGFS_ATTR(nvmet_ctrl_port);
 
 static const char *const csts_state_names[] = {
-	[NVME_CSTS_RDY]		= "ready",
-	[NVME_CSTS_CFS]		= "fatal",
-	[NVME_CSTS_NSSRO]	= "reset",
-	[NVME_CSTS_SHST_OCCUR]	= "shutdown",
-	[NVME_CSTS_SHST_CMPLT]	= "completed",
-	[NVME_CSTS_PP]		= "paused",
+	[NVME_CSTS_RDY] = "ready",
+	[NVME_CSTS_CFS] = "fatal",
+	[NVME_CSTS_NSSRO] = "reset",
+	[NVME_CSTS_SHST_OCCUR] = "shutdown",
+	[NVME_CSTS_SHST_CMPLT] = "completed",
+	[NVME_CSTS_PP] = "paused",
 };
 
 static int nvmet_ctrl_state_show(struct seq_file *m, void *p)
@@ -196,8 +200,8 @@ int nvmet_debugfs_subsys_setup(struct nvmet_subsys *subsys)
 {
 	int ret = 0;
 
-	subsys->debugfs_dir = debugfs_create_dir(subsys->subsysnqn,
-						 nvmet_debugfs);
+	subsys->debugfs_dir =
+		debugfs_create_dir(subsys->subsysnqn, nvmet_debugfs);
 	if (IS_ERR(subsys->debugfs_dir)) {
 		ret = PTR_ERR(subsys->debugfs_dir);
 		subsys->debugfs_dir = NULL;

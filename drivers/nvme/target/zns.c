@@ -13,7 +13,7 @@
  * which gets added by 12 in the nvme_enable_ctrl() which results in 2^12 = 4k
  * as page_shift value. When calculating the ZASL use shift by 12.
  */
-#define NVMET_MPSMIN_SHIFT	12
+#define NVMET_MPSMIN_SHIFT 12
 
 static inline u8 nvmet_zasl(unsigned int zone_append_sects)
 {
@@ -24,8 +24,8 @@ static inline u8 nvmet_zasl(unsigned int zone_append_sects)
 	return ilog2(zone_append_sects >> (NVMET_MPSMIN_SHIFT - 9));
 }
 
-static int validate_conv_zones_cb(struct blk_zone *z,
-				  unsigned int i, void *data)
+static int validate_conv_zones_cb(struct blk_zone *z, unsigned int i,
+				  void *data)
 {
 	if (z->type == BLK_ZONE_TYPE_CONVENTIONAL)
 		return -EOPNOTSUPP;
@@ -127,7 +127,7 @@ void nvmet_execute_identify_ns_zns(struct nvmet_req *req)
 	}
 
 	zsze = (bdev_zone_sectors(req->ns->bdev) << 9) >>
-					req->ns->blksize_shift;
+	       req->ns->blksize_shift;
 	id_zns->lbafe[0].zsze = cpu_to_le64(zsze);
 
 	mor = bdev_max_open_zones(req->ns->bdev);
@@ -210,13 +210,13 @@ struct nvmet_report_zone_data {
 static int nvmet_bdev_report_zone_cb(struct blk_zone *z, unsigned i, void *d)
 {
 	static const unsigned int nvme_zrasf_to_blk_zcond[] = {
-		[NVME_ZRASF_ZONE_STATE_EMPTY]	 = BLK_ZONE_COND_EMPTY,
+		[NVME_ZRASF_ZONE_STATE_EMPTY] = BLK_ZONE_COND_EMPTY,
 		[NVME_ZRASF_ZONE_STATE_IMP_OPEN] = BLK_ZONE_COND_IMP_OPEN,
 		[NVME_ZRASF_ZONE_STATE_EXP_OPEN] = BLK_ZONE_COND_EXP_OPEN,
-		[NVME_ZRASF_ZONE_STATE_CLOSED]	 = BLK_ZONE_COND_CLOSED,
+		[NVME_ZRASF_ZONE_STATE_CLOSED] = BLK_ZONE_COND_CLOSED,
 		[NVME_ZRASF_ZONE_STATE_READONLY] = BLK_ZONE_COND_READONLY,
-		[NVME_ZRASF_ZONE_STATE_FULL]	 = BLK_ZONE_COND_FULL,
-		[NVME_ZRASF_ZONE_STATE_OFFLINE]	 = BLK_ZONE_COND_OFFLINE,
+		[NVME_ZRASF_ZONE_STATE_FULL] = BLK_ZONE_COND_FULL,
+		[NVME_ZRASF_ZONE_STATE_OFFLINE] = BLK_ZONE_COND_OFFLINE,
 	};
 	struct nvmet_report_zone_data *rz = d;
 
@@ -225,7 +225,7 @@ static int nvmet_bdev_report_zone_cb(struct blk_zone *z, unsigned i, void *d)
 		return 0;
 
 	if (rz->nr_zones < rz->out_nr_zones) {
-		struct nvme_zone_descriptor zdesc = { };
+		struct nvme_zone_descriptor zdesc = {};
 		u16 status;
 
 		zdesc.zcap = nvmet_sect_to_lba(rz->req->ns, z->capacity);
@@ -261,7 +261,7 @@ static unsigned long get_nr_zones_from_buf(struct nvmet_req *req, u32 bufsize)
 		return 0;
 
 	return (bufsize - sizeof(struct nvme_zone_report)) /
-		sizeof(struct nvme_zone_descriptor);
+	       sizeof(struct nvme_zone_descriptor);
 }
 
 static void nvmet_bdev_zone_zmgmt_recv_work(struct work_struct *w)
@@ -292,7 +292,7 @@ static void nvmet_bdev_zone_zmgmt_recv_work(struct work_struct *w)
 	}
 
 	ret = blkdev_report_zones(req->ns->bdev, start_sect, req_slba_nr_zones,
-				 nvmet_bdev_report_zone_cb, &rz_data);
+				  nvmet_bdev_report_zone_cb, &rz_data);
 	if (ret < 0) {
 		status = NVME_SC_INTERNAL;
 		goto out;
@@ -425,8 +425,9 @@ static u16 nvmet_bdev_zone_mgmt_emulate_all(struct nvmet_req *req)
 	while (sector < bdev_nr_sectors(bdev)) {
 		if (test_bit(disk_zone_no(bdev->bd_disk, sector), d.zbitmap)) {
 			bio = blk_next_bio(bio, bdev, 0,
-				zsa_req_op(req->cmd->zms.zsa) | REQ_SYNC,
-				GFP_KERNEL);
+					   zsa_req_op(req->cmd->zms.zsa) |
+						   REQ_SYNC,
+					   GFP_KERNEL);
 			bio->bi_iter.bi_sector = sector;
 			/* This may take a while, so be nice to others */
 			cond_resched();
@@ -545,8 +546,8 @@ void nvmet_bdev_execute_zone_append(struct nvmet_req *req)
 	if (!nvmet_check_transfer_len(req, nvmet_rw_data_len(req)))
 		return;
 
-	if (data_len >
-	    bdev_max_zone_append_sectors(req->ns->bdev) << SECTOR_SHIFT) {
+	if (data_len > bdev_max_zone_append_sectors(req->ns->bdev)
+			       << SECTOR_SHIFT) {
 		req->error_loc = offsetof(struct nvme_rw_command, length);
 		status = NVME_SC_INVALID_FIELD | NVME_STATUS_DNR;
 		goto out;

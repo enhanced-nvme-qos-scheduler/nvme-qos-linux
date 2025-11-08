@@ -122,7 +122,7 @@ u16 nvmet_parse_fabrics_admin_cmd(struct nvmet_req *req)
 #endif
 	default:
 		pr_debug("received unknown capsule type 0x%x\n",
-			cmd->fabrics.fctype);
+			 cmd->fabrics.fctype);
 		req->error_loc = offsetof(struct nvmf_common_command, fctype);
 		return NVME_SC_INVALID_OPCODE | NVME_STATUS_DNR;
 	}
@@ -161,7 +161,7 @@ u16 nvmet_parse_fabrics_io_cmd(struct nvmet_req *req)
 #endif
 	default:
 		pr_debug("received unknown capsule type 0x%x\n",
-			cmd->fabrics.fctype);
+			 cmd->fabrics.fctype);
 		req->error_loc = offsetof(struct nvmf_common_command, fctype);
 		return NVME_SC_INVALID_OPCODE | NVME_STATUS_DNR;
 	}
@@ -195,7 +195,7 @@ static u16 nvmet_install_queue(struct nvmet_ctrl *ctrl, struct nvmet_req *req)
 	/* for fabrics, this value applies to only the I/O Submission Queues */
 	if (qid && sqsize > mqes) {
 		pr_warn("sqsize %u is larger than MQES supported %u cntlid %d\n",
-				sqsize, mqes, ctrl->cntlid);
+			sqsize, mqes, ctrl->cntlid);
 		req->error_loc = offsetof(struct nvmf_connect_command, sqsize);
 		req->cqe->result.u32 = IPO_IATTR_CONNECT_SQE(sqsize);
 		return NVME_SC_CONNECT_INVALID_PARAM | NVME_STATUS_DNR;
@@ -229,7 +229,7 @@ static u16 nvmet_install_queue(struct nvmet_ctrl *ctrl, struct nvmet_req *req)
 		ret = ctrl->ops->install_queue(req->sq);
 		if (ret) {
 			pr_err("failed to install queue %d cntlid %d ret %x\n",
-				qid, ctrl->cntlid, ret);
+			       qid, ctrl->cntlid, ret);
 			ctrl->sqs[qid] = NULL;
 			goto err;
 		}
@@ -252,16 +252,16 @@ static u32 nvmet_connect_result(struct nvmet_ctrl *ctrl, struct nvmet_sq *sq)
 		needs_auth = false;
 
 	if (keyid)
-		pr_debug("%s: ctrl %d qid %d should %sauthenticate, tls psk %08x\n",
-			 __func__, ctrl->cntlid, sq->qid,
-			 needs_auth ? "" : "not ", keyid);
+		pr_debug(
+			"%s: ctrl %d qid %d should %sauthenticate, tls psk %08x\n",
+			__func__, ctrl->cntlid, sq->qid,
+			needs_auth ? "" : "not ", keyid);
 	else
 		pr_debug("%s: ctrl %d qid %d should %sauthenticate%s\n",
 			 __func__, ctrl->cntlid, sq->qid,
 			 needs_auth ? "" : "not ",
 			 ctrl->concat ? ", secure concatenation" : "");
-	return (u32)ctrl->cntlid |
-		(needs_auth ? NVME_CONNECT_AUTHREQ_ATR : 0);
+	return (u32)ctrl->cntlid | (needs_auth ? NVME_CONNECT_AUTHREQ_ATR : 0);
 }
 
 static void nvmet_execute_admin_connect(struct nvmet_req *req)
@@ -411,13 +411,13 @@ u16 nvmet_parse_connect_cmd(struct nvmet_req *req)
 
 	if (!nvme_is_fabrics(cmd)) {
 		pr_debug("invalid command 0x%x on unconnected queue.\n",
-			cmd->fabrics.opcode);
+			 cmd->fabrics.opcode);
 		req->error_loc = offsetof(struct nvme_common_command, opcode);
 		return NVME_SC_INVALID_OPCODE | NVME_STATUS_DNR;
 	}
 	if (cmd->fabrics.fctype != nvme_fabrics_type_connect) {
 		pr_debug("invalid capsule type 0x%x on unconnected queue.\n",
-			cmd->fabrics.fctype);
+			 cmd->fabrics.fctype);
 		req->error_loc = offsetof(struct nvmf_common_command, fctype);
 		return NVME_SC_INVALID_OPCODE | NVME_STATUS_DNR;
 	}

@@ -11,7 +11,7 @@
 #include <linux/fs.h>
 #include "nvmet.h"
 
-#define NVMET_MIN_MPOOL_OBJ		16
+#define NVMET_MIN_MPOOL_OBJ 16
 
 void nvmet_file_ns_revalidate(struct nvmet_ns *ns)
 {
@@ -41,8 +41,7 @@ int nvmet_file_ns_enable(struct nvmet_ns *ns)
 	ns->file = filp_open(ns->device_path, flags, 0);
 	if (IS_ERR(ns->file)) {
 		ret = PTR_ERR(ns->file);
-		pr_err("failed to open file %s: (%d)\n",
-			ns->device_path, ret);
+		pr_err("failed to open file %s: (%d)\n", ns->device_path, ret);
 		ns->file = NULL;
 		return ret;
 	}
@@ -53,11 +52,10 @@ int nvmet_file_ns_enable(struct nvmet_ns *ns)
 	 * i_blkbits can be greater than the universally accepted upper bound,
 	 * so make sure we export a sane namespace lba_shift.
 	 */
-	ns->blksize_shift = min_t(u8,
-			file_inode(ns->file)->i_blkbits, 12);
+	ns->blksize_shift = min_t(u8, file_inode(ns->file)->i_blkbits, 12);
 
 	ns->bvec_pool = mempool_create(NVMET_MIN_MPOOL_OBJ, mempool_alloc_slab,
-			mempool_free_slab, nvmet_bvec_cache);
+				       mempool_free_slab, nvmet_bvec_cache);
 
 	if (!ns->bvec_pool) {
 		ret = -ENOMEM;
@@ -74,7 +72,8 @@ err:
 }
 
 static ssize_t nvmet_file_submit_bvec(struct nvmet_req *req, loff_t pos,
-		unsigned long nr_segs, size_t count, int ki_flags)
+				      unsigned long nr_segs, size_t count,
+				      int ki_flags)
 {
 	struct kiocb *iocb = &req->f.iocb;
 	ssize_t (*call_iter)(struct kiocb *iocb, struct iov_iter *iter);
@@ -229,7 +228,7 @@ static void nvmet_file_execute_rw(struct nvmet_req *req)
 
 	if (nr_bvec > NVMET_MAX_INLINE_BIOVEC)
 		req->f.bvec = kmalloc_array(nr_bvec, sizeof(struct bio_vec),
-				GFP_KERNEL);
+					    GFP_KERNEL);
 	else
 		req->f.bvec = req->inline_bvec;
 
@@ -281,7 +280,7 @@ static void nvmet_file_execute_discard(struct nvmet_req *req)
 
 	for (i = 0; i <= le32_to_cpu(req->cmd->dsm.nr); i++) {
 		status = nvmet_copy_from_sgl(req, i * sizeof(range), &range,
-					sizeof(range));
+					     sizeof(range));
 		if (status)
 			break;
 
@@ -340,8 +339,8 @@ static void nvmet_file_write_zeroes_work(struct work_struct *w)
 	int ret;
 
 	offset = le64_to_cpu(write_zeroes->slba) << req->ns->blksize_shift;
-	len = (((sector_t)le16_to_cpu(write_zeroes->length) + 1) <<
-			req->ns->blksize_shift);
+	len = (((sector_t)le16_to_cpu(write_zeroes->length) + 1)
+	       << req->ns->blksize_shift);
 
 	if (unlikely(offset + len > req->ns->size)) {
 		nvmet_req_complete(req, errno_to_nvme_status(req, -ENOSPC));

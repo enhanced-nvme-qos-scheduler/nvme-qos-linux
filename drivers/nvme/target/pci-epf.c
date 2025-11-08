@@ -31,78 +31,77 @@ static DEFINE_MUTEX(nvmet_pci_epf_ports_mutex);
  * allow up to 128 page-sized segments. For the maximum allowed,
  * use 4 times the default (which is completely arbitrary).
  */
-#define NVMET_PCI_EPF_MAX_SEGS		128
-#define NVMET_PCI_EPF_MDTS_KB		\
-	(NVMET_PCI_EPF_MAX_SEGS << (PAGE_SHIFT - 10))
-#define NVMET_PCI_EPF_MAX_MDTS_KB	(NVMET_PCI_EPF_MDTS_KB * 4)
+#define NVMET_PCI_EPF_MAX_SEGS 128
+#define NVMET_PCI_EPF_MDTS_KB (NVMET_PCI_EPF_MAX_SEGS << (PAGE_SHIFT - 10))
+#define NVMET_PCI_EPF_MAX_MDTS_KB (NVMET_PCI_EPF_MDTS_KB * 4)
 
 /*
  * IRQ vector coalescing threshold: by default, post 8 CQEs before raising an
  * interrupt vector to the host. This default 8 is completely arbitrary and can
  * be changed by the host with a nvme_set_features command.
  */
-#define NVMET_PCI_EPF_IV_THRESHOLD	8
+#define NVMET_PCI_EPF_IV_THRESHOLD 8
 
 /*
  * BAR CC register and SQ polling intervals.
  */
-#define NVMET_PCI_EPF_CC_POLL_INTERVAL	msecs_to_jiffies(10)
-#define NVMET_PCI_EPF_SQ_POLL_INTERVAL	msecs_to_jiffies(5)
-#define NVMET_PCI_EPF_SQ_POLL_IDLE	msecs_to_jiffies(5000)
+#define NVMET_PCI_EPF_CC_POLL_INTERVAL msecs_to_jiffies(10)
+#define NVMET_PCI_EPF_SQ_POLL_INTERVAL msecs_to_jiffies(5)
+#define NVMET_PCI_EPF_SQ_POLL_IDLE msecs_to_jiffies(5000)
 
 /*
  * SQ arbitration burst default: fetch at most 8 commands at a time from an SQ.
  */
-#define NVMET_PCI_EPF_SQ_AB		8
+#define NVMET_PCI_EPF_SQ_AB 8
 
 /*
  * Handling of CQs is normally immediate, unless we fail to map a CQ or the CQ
  * is full, in which case we retry the CQ processing after this interval.
  */
-#define NVMET_PCI_EPF_CQ_RETRY_INTERVAL	msecs_to_jiffies(1)
+#define NVMET_PCI_EPF_CQ_RETRY_INTERVAL msecs_to_jiffies(1)
 
 enum nvmet_pci_epf_queue_flags {
-	NVMET_PCI_EPF_Q_LIVE = 0,	/* The queue is live */
-	NVMET_PCI_EPF_Q_IRQ_ENABLED,	/* IRQ is enabled for this queue */
+	NVMET_PCI_EPF_Q_LIVE = 0, /* The queue is live */
+	NVMET_PCI_EPF_Q_IRQ_ENABLED, /* IRQ is enabled for this queue */
 };
 
 /*
  * IRQ vector descriptor.
  */
 struct nvmet_pci_epf_irq_vector {
-	unsigned int	vector;
-	unsigned int	ref;
-	bool		cd;
-	int		nr_irqs;
+	unsigned int vector;
+	unsigned int ref;
+	bool cd;
+	int nr_irqs;
 };
 
 struct nvmet_pci_epf_queue {
 	union {
-		struct nvmet_sq		nvme_sq;
-		struct nvmet_cq		nvme_cq;
+		struct nvmet_sq nvme_sq;
+		struct nvmet_cq nvme_cq;
 	};
-	struct nvmet_pci_epf_ctrl	*ctrl;
-	unsigned long			flags;
+	struct nvmet_pci_epf_ctrl *ctrl;
+	unsigned long flags;
 
-	u64				pci_addr;
-	size_t				pci_size;
-	struct pci_epc_map		pci_map;
+	u64 pci_addr;
+	size_t pci_size;
+	struct pci_epc_map pci_map;
 
-	u16				qid;
-	u16				depth;
-	u16				vector;
-	u16				head;
-	u16				tail;
-	u16				phase;
-	u32				db;
+	u16 qid;
+	u16 depth;
+	u16 vector;
+	u16 head;
+	u16 tail;
+	u16 phase;
+	u32 db;
 
-	size_t				qes;
+	size_t qes;
 
-	struct nvmet_pci_epf_irq_vector	*iv;
-	struct workqueue_struct		*iod_wq;
-	struct delayed_work		work;
-	spinlock_t			lock;
-	struct list_head		list;
+	struct nvmet_pci_epf_irq_vector *iv;
+	struct workqueue_struct *iod_wq;
+	struct delayed_work work;
+	spinlock_t lock;
+	struct list_head list;
 };
 
 /*
@@ -110,30 +109,30 @@ struct nvmet_pci_epf_queue {
  * I/O command buffer @buf of @length bytes to the PCI address @pci_addr.
  */
 struct nvmet_pci_epf_segment {
-	void				*buf;
-	u64				pci_addr;
-	u32				length;
+	void *buf;
+	u64 pci_addr;
+	u32 length;
 };
 
 /*
  * Command descriptors.
  */
 struct nvmet_pci_epf_iod {
-	struct list_head		link;
+	struct list_head link;
 
-	struct nvmet_req		req;
-	struct nvme_command		cmd;
-	struct nvme_completion		cqe;
-	unsigned int			status;
+	struct nvmet_req req;
+	struct nvme_command cmd;
+	struct nvme_completion cqe;
+	unsigned int status;
 
-	struct nvmet_pci_epf_ctrl	*ctrl;
+	struct nvmet_pci_epf_ctrl *ctrl;
 
-	struct nvmet_pci_epf_queue	*sq;
-	struct nvmet_pci_epf_queue	*cq;
+	struct nvmet_pci_epf_queue *sq;
+	struct nvmet_pci_epf_queue *cq;
 
 	/* Data transfer size and direction for the command. */
-	size_t				data_len;
-	enum dma_data_direction		dma_dir;
+	size_t data_len;
+	enum dma_data_direction dma_dir;
 
 	/*
 	 * PCI Root Complex (RC) address data segments: if nr_data_segs is 1, we
@@ -142,85 +141,85 @@ struct nvmet_pci_epf_iod {
 	 * @data_sgt are used to setup the command request for execution by the
 	 * target core.
 	 */
-	unsigned int			nr_data_segs;
-	struct nvmet_pci_epf_segment	data_seg;
-	struct nvmet_pci_epf_segment	*data_segs;
-	struct scatterlist		data_sgl;
-	struct sg_table			data_sgt;
+	unsigned int nr_data_segs;
+	struct nvmet_pci_epf_segment data_seg;
+	struct nvmet_pci_epf_segment *data_segs;
+	struct scatterlist data_sgl;
+	struct sg_table data_sgt;
 
-	struct work_struct		work;
-	struct completion		done;
+	struct work_struct work;
+	struct completion done;
 };
 
 /*
  * PCI target controller private data.
  */
 struct nvmet_pci_epf_ctrl {
-	struct nvmet_pci_epf		*nvme_epf;
-	struct nvmet_port		*port;
-	struct nvmet_ctrl		*tctrl;
-	struct device			*dev;
+	struct nvmet_pci_epf *nvme_epf;
+	struct nvmet_port *port;
+	struct nvmet_ctrl *tctrl;
+	struct device *dev;
 
-	unsigned int			nr_queues;
-	struct nvmet_pci_epf_queue	*sq;
-	struct nvmet_pci_epf_queue	*cq;
-	unsigned int			sq_ab;
+	unsigned int nr_queues;
+	struct nvmet_pci_epf_queue *sq;
+	struct nvmet_pci_epf_queue *cq;
+	unsigned int sq_ab;
 
-	mempool_t			iod_pool;
-	void				*bar;
-	u64				cap;
-	u32				cc;
-	u32				csts;
+	mempool_t iod_pool;
+	void *bar;
+	u64 cap;
+	u32 cc;
+	u32 csts;
 
-	size_t				io_sqes;
-	size_t				io_cqes;
+	size_t io_sqes;
+	size_t io_cqes;
 
-	size_t				mps_shift;
-	size_t				mps;
-	size_t				mps_mask;
+	size_t mps_shift;
+	size_t mps;
+	size_t mps_mask;
 
-	unsigned int			mdts;
+	unsigned int mdts;
 
-	struct delayed_work		poll_cc;
-	struct delayed_work		poll_sqs;
+	struct delayed_work poll_cc;
+	struct delayed_work poll_sqs;
 
-	struct mutex			irq_lock;
-	struct nvmet_pci_epf_irq_vector	*irq_vectors;
-	unsigned int			irq_vector_threshold;
+	struct mutex irq_lock;
+	struct nvmet_pci_epf_irq_vector *irq_vectors;
+	unsigned int irq_vector_threshold;
 
-	bool				link_up;
-	bool				enabled;
+	bool link_up;
+	bool enabled;
 };
 
 /*
  * PCI EPF driver private data.
  */
 struct nvmet_pci_epf {
-	struct pci_epf			*epf;
+	struct pci_epf *epf;
 
-	const struct pci_epc_features	*epc_features;
+	const struct pci_epc_features *epc_features;
 
-	void				*reg_bar;
-	size_t				msix_table_offset;
+	void *reg_bar;
+	size_t msix_table_offset;
 
-	unsigned int			irq_type;
-	unsigned int			nr_vectors;
+	unsigned int irq_type;
+	unsigned int nr_vectors;
 
-	struct nvmet_pci_epf_ctrl	ctrl;
+	struct nvmet_pci_epf_ctrl ctrl;
 
-	bool				dma_enabled;
-	struct dma_chan			*dma_tx_chan;
-	struct mutex			dma_tx_lock;
-	struct dma_chan			*dma_rx_chan;
-	struct mutex			dma_rx_lock;
+	bool dma_enabled;
+	struct dma_chan *dma_tx_chan;
+	struct mutex dma_tx_lock;
+	struct dma_chan *dma_rx_chan;
+	struct mutex dma_rx_lock;
 
-	struct mutex			mmio_lock;
+	struct mutex mmio_lock;
 
 	/* PCI endpoint function configfs attributes. */
-	struct config_group		group;
-	__le16				portid;
-	char				subsysnqn[NVMF_NQN_SIZE];
-	unsigned int			mdts_kb;
+	struct config_group group;
+	__le16 portid;
+	char subsysnqn[NVMF_NQN_SIZE];
+	unsigned int mdts_kb;
 };
 
 static inline u32 nvmet_pci_epf_bar_read32(struct nvmet_pci_epf_ctrl *ctrl,
@@ -243,7 +242,7 @@ static inline u64 nvmet_pci_epf_bar_read64(struct nvmet_pci_epf_ctrl *ctrl,
 					   u32 off)
 {
 	return (u64)nvmet_pci_epf_bar_read32(ctrl, off) |
-		((u64)nvmet_pci_epf_bar_read32(ctrl, off + 4) << 32);
+	       ((u64)nvmet_pci_epf_bar_read32(ctrl, off + 4) << 32);
 }
 
 static inline void nvmet_pci_epf_bar_write64(struct nvmet_pci_epf_ctrl *ctrl,
@@ -254,12 +253,13 @@ static inline void nvmet_pci_epf_bar_write64(struct nvmet_pci_epf_ctrl *ctrl,
 }
 
 static inline int nvmet_pci_epf_mem_map(struct nvmet_pci_epf *nvme_epf,
-		u64 pci_addr, size_t size, struct pci_epc_map *map)
+					u64 pci_addr, size_t size,
+					struct pci_epc_map *map)
 {
 	struct pci_epf *epf = nvme_epf->epf;
 
-	return pci_epc_mem_map(epf->epc, epf->func_no, epf->vfunc_no,
-			       pci_addr, size, map);
+	return pci_epc_mem_map(epf->epc, epf->func_no, epf->vfunc_no, pci_addr,
+			       size, map);
 }
 
 static inline void nvmet_pci_epf_mem_unmap(struct nvmet_pci_epf *nvme_epf,
@@ -284,7 +284,7 @@ static bool nvmet_pci_epf_dma_filter(struct dma_chan *chan, void *arg)
 	dma_get_slave_caps(chan, &caps);
 
 	return chan->device->dev == filter->dev &&
-		(filter->dma_mask & caps.directions);
+	       (filter->dma_mask & caps.directions);
 }
 
 static void nvmet_pci_epf_init_dma(struct nvmet_pci_epf *nvme_epf)
@@ -356,7 +356,8 @@ static void nvmet_pci_epf_deinit_dma(struct nvmet_pci_epf *nvme_epf)
 }
 
 static int nvmet_pci_epf_dma_transfer(struct nvmet_pci_epf *nvme_epf,
-		struct nvmet_pci_epf_segment *seg, enum dma_data_direction dir)
+				      struct nvmet_pci_epf_segment *seg,
+				      enum dma_data_direction dir)
 {
 	struct pci_epf *epf = nvme_epf->epf;
 	struct dma_async_tx_descriptor *desc;
@@ -432,7 +433,8 @@ unlock:
 }
 
 static int nvmet_pci_epf_mmio_transfer(struct nvmet_pci_epf *nvme_epf,
-		struct nvmet_pci_epf_segment *seg, enum dma_data_direction dir)
+				       struct nvmet_pci_epf_segment *seg,
+				       enum dma_data_direction dir)
 {
 	u64 pci_addr = seg->pci_addr;
 	u32 length = seg->length;
@@ -477,7 +479,8 @@ unlock:
 }
 
 static inline int nvmet_pci_epf_transfer_seg(struct nvmet_pci_epf *nvme_epf,
-		struct nvmet_pci_epf_segment *seg, enum dma_data_direction dir)
+					     struct nvmet_pci_epf_segment *seg,
+					     enum dma_data_direction dir)
 {
 	if (nvme_epf->dma_enabled)
 		return nvmet_pci_epf_dma_transfer(nvme_epf, seg, dir);
@@ -590,7 +593,8 @@ static void nvmet_pci_epf_remove_irq_vector(struct nvmet_pci_epf_ctrl *ctrl,
 }
 
 static bool nvmet_pci_epf_should_raise_irq(struct nvmet_pci_epf_ctrl *ctrl,
-		struct nvmet_pci_epf_queue *cq, bool force)
+					   struct nvmet_pci_epf_queue *cq,
+					   bool force)
 {
 	struct nvmet_pci_epf_irq_vector *iv = cq->iv;
 	bool ret;
@@ -615,7 +619,7 @@ static bool nvmet_pci_epf_should_raise_irq(struct nvmet_pci_epf_ctrl *ctrl,
 }
 
 static void nvmet_pci_epf_raise_irq(struct nvmet_pci_epf_ctrl *ctrl,
-		struct nvmet_pci_epf_queue *cq, bool force)
+				    struct nvmet_pci_epf_queue *cq, bool force)
 {
 	struct nvmet_pci_epf *nvme_epf = ctrl->nvme_epf;
 	struct pci_epf *epf = nvme_epf->epf;
@@ -938,8 +942,8 @@ static int nvmet_pci_epf_iod_parse_prp_simple(struct nvmet_pci_epf_ctrl *ctrl,
 			return -EINVAL;
 		}
 		if (nvmet_pci_epf_prp_ofst(ctrl, prp2)) {
-			iod->status =
-				NVME_SC_PRP_INVALID_OFFSET | NVME_STATUS_DNR;
+			iod->status = NVME_SC_PRP_INVALID_OFFSET |
+				      NVME_STATUS_DNR;
 			return -EINVAL;
 		}
 		if (prp2 != prp1 + prp1_size)
@@ -1072,7 +1076,7 @@ static int nvmet_pci_epf_iod_parse_sgl_segments(struct nvmet_pci_epf_ctrl *ctrl,
 		for (i = 0; i < nr_sgls; i++) {
 			if (sgls[i].type != (NVME_SGL_FMT_DATA_DESC << 4)) {
 				iod->status = NVME_SC_SGL_INVALID_TYPE |
-					NVME_STATUS_DNR;
+					      NVME_STATUS_DNR;
 				goto out;
 			}
 			iod->data_segs[n].pci_addr = le64_to_cpu(sgls[i].addr);
@@ -1083,7 +1087,7 @@ static int nvmet_pci_epf_iod_parse_sgl_segments(struct nvmet_pci_epf_ctrl *ctrl,
 		kfree(sgls);
 	}
 
- out:
+out:
 	if (iod->status != NVME_SC_SUCCESS) {
 		kfree(sgls);
 		return -EIO;
@@ -1262,8 +1266,9 @@ static u8 nvmet_pci_epf_get_mdts(const struct nvmet_ctrl *tctrl)
 	return ilog2(ctrl->mdts) - page_shift;
 }
 
-static u16 nvmet_pci_epf_create_cq(struct nvmet_ctrl *tctrl,
-		u16 cqid, u16 flags, u16 qsize, u64 pci_addr, u16 vector)
+static u16 nvmet_pci_epf_create_cq(struct nvmet_ctrl *tctrl, u16 cqid,
+				   u16 flags, u16 qsize, u64 pci_addr,
+				   u16 vector)
 {
 	struct nvmet_pci_epf_ctrl *ctrl = tctrl->drvdata;
 	struct nvmet_pci_epf_queue *cq = &ctrl->cq[cqid];
@@ -1310,8 +1315,8 @@ static u16 nvmet_pci_epf_create_cq(struct nvmet_ctrl *tctrl,
 	ret = nvmet_pci_epf_mem_map(ctrl->nvme_epf, cq->pci_addr, cq->pci_size,
 				    &cq->pci_map);
 	if (ret) {
-		dev_err(ctrl->dev, "Failed to map CQ %u (err=%d)\n",
-			cq->qid, ret);
+		dev_err(ctrl->dev, "Failed to map CQ %u (err=%d)\n", cq->qid,
+			ret);
 		goto err_internal;
 	}
 
@@ -1325,12 +1330,12 @@ static u16 nvmet_pci_epf_create_cq(struct nvmet_ctrl *tctrl,
 
 	if (test_bit(NVMET_PCI_EPF_Q_IRQ_ENABLED, &cq->flags))
 		dev_dbg(ctrl->dev,
-			"CQ[%u]: %u entries of %zu B, IRQ vector %u\n",
-			cqid, qsize, cq->qes, cq->vector);
+			"CQ[%u]: %u entries of %zu B, IRQ vector %u\n", cqid,
+			qsize, cq->qes, cq->vector);
 	else
 		dev_dbg(ctrl->dev,
-			"CQ[%u]: %u entries of %zu B, IRQ disabled\n",
-			cqid, qsize, cq->qes);
+			"CQ[%u]: %u entries of %zu B, IRQ disabled\n", cqid,
+			qsize, cq->qes);
 
 	return NVME_SC_SUCCESS;
 
@@ -1362,8 +1367,8 @@ static u16 nvmet_pci_epf_delete_cq(struct nvmet_ctrl *tctrl, u16 cqid)
 	return NVME_SC_SUCCESS;
 }
 
-static u16 nvmet_pci_epf_create_sq(struct nvmet_ctrl *tctrl,
-		u16 sqid, u16 cqid, u16 flags, u16 qsize, u64 pci_addr)
+static u16 nvmet_pci_epf_create_sq(struct nvmet_ctrl *tctrl, u16 sqid, u16 cqid,
+				   u16 flags, u16 qsize, u64 pci_addr)
 {
 	struct nvmet_pci_epf_ctrl *ctrl = tctrl->drvdata;
 	struct nvmet_pci_epf_queue *sq = &ctrl->sq[sqid];
@@ -1391,12 +1396,13 @@ static u16 nvmet_pci_epf_create_sq(struct nvmet_ctrl *tctrl,
 	sq->pci_size = sq->qes * sq->depth;
 
 	status = nvmet_sq_create(tctrl, &sq->nvme_sq, &cq->nvme_cq, sqid,
-			sq->depth);
+				 sq->depth);
 	if (status != NVME_SC_SUCCESS)
 		return status;
 
 	sq->iod_wq = alloc_workqueue("sq%d_wq", WQ_UNBOUND,
-				min_t(int, sq->depth, WQ_MAX_ACTIVE), sqid);
+				     min_t(int, sq->depth, WQ_MAX_ACTIVE),
+				     sqid);
 	if (!sq->iod_wq) {
 		dev_err(ctrl->dev, "Failed to create SQ %d work queue\n", sqid);
 		status = NVME_SC_INTERNAL | NVME_STATUS_DNR;
@@ -1405,8 +1411,8 @@ static u16 nvmet_pci_epf_create_sq(struct nvmet_ctrl *tctrl,
 
 	set_bit(NVMET_PCI_EPF_Q_LIVE, &sq->flags);
 
-	dev_dbg(ctrl->dev, "SQ[%u]: %u entries of %zu B\n",
-		sqid, qsize, sq->qes);
+	dev_dbg(ctrl->dev, "SQ[%u]: %u entries of %zu B\n", sqid, qsize,
+		sq->qes);
 
 	return NVME_SC_SUCCESS;
 
@@ -1434,8 +1440,8 @@ static u16 nvmet_pci_epf_delete_sq(struct nvmet_ctrl *tctrl, u16 sqid)
 	return NVME_SC_SUCCESS;
 }
 
-static u16 nvmet_pci_epf_get_feat(const struct nvmet_ctrl *tctrl,
-				  u8 feat, void *data)
+static u16 nvmet_pci_epf_get_feat(const struct nvmet_ctrl *tctrl, u8 feat,
+				  void *data)
 {
 	struct nvmet_pci_epf_ctrl *ctrl = tctrl->drvdata;
 	struct nvmet_feat_arbitration *arb;
@@ -1477,8 +1483,8 @@ static u16 nvmet_pci_epf_get_feat(const struct nvmet_ctrl *tctrl,
 	}
 }
 
-static u16 nvmet_pci_epf_set_feat(const struct nvmet_ctrl *tctrl,
-				  u8 feat, void *data)
+static u16 nvmet_pci_epf_set_feat(const struct nvmet_ctrl *tctrl, u8 feat,
+				  void *data)
 {
 	struct nvmet_pci_epf_ctrl *ctrl = tctrl->drvdata;
 	struct nvmet_feat_arbitration *arb;
@@ -1524,18 +1530,18 @@ static u16 nvmet_pci_epf_set_feat(const struct nvmet_ctrl *tctrl,
 }
 
 static const struct nvmet_fabrics_ops nvmet_pci_epf_fabrics_ops = {
-	.owner		= THIS_MODULE,
-	.type		= NVMF_TRTYPE_PCI,
-	.add_port	= nvmet_pci_epf_add_port,
-	.remove_port	= nvmet_pci_epf_remove_port,
+	.owner = THIS_MODULE,
+	.type = NVMF_TRTYPE_PCI,
+	.add_port = nvmet_pci_epf_add_port,
+	.remove_port = nvmet_pci_epf_remove_port,
 	.queue_response = nvmet_pci_epf_queue_response,
-	.get_mdts	= nvmet_pci_epf_get_mdts,
-	.create_cq	= nvmet_pci_epf_create_cq,
-	.delete_cq	= nvmet_pci_epf_delete_cq,
-	.create_sq	= nvmet_pci_epf_create_sq,
-	.delete_sq	= nvmet_pci_epf_delete_sq,
-	.get_feature	= nvmet_pci_epf_get_feat,
-	.set_feature	= nvmet_pci_epf_set_feat,
+	.get_mdts = nvmet_pci_epf_get_mdts,
+	.create_cq = nvmet_pci_epf_create_cq,
+	.delete_cq = nvmet_pci_epf_delete_cq,
+	.create_sq = nvmet_pci_epf_create_sq,
+	.delete_sq = nvmet_pci_epf_delete_sq,
+	.get_feature = nvmet_pci_epf_get_feat,
+	.set_feature = nvmet_pci_epf_set_feat,
 };
 
 static void nvmet_pci_epf_cq_work(struct work_struct *work);
@@ -1561,13 +1567,13 @@ static int nvmet_pci_epf_alloc_queues(struct nvmet_pci_epf_ctrl *ctrl)
 {
 	unsigned int qid;
 
-	ctrl->sq = kcalloc(ctrl->nr_queues,
-			   sizeof(struct nvmet_pci_epf_queue), GFP_KERNEL);
+	ctrl->sq = kcalloc(ctrl->nr_queues, sizeof(struct nvmet_pci_epf_queue),
+			   GFP_KERNEL);
 	if (!ctrl->sq)
 		return -ENOMEM;
 
-	ctrl->cq = kcalloc(ctrl->nr_queues,
-			   sizeof(struct nvmet_pci_epf_queue), GFP_KERNEL);
+	ctrl->cq = kcalloc(ctrl->nr_queues, sizeof(struct nvmet_pci_epf_queue),
+			   GFP_KERNEL);
 	if (!ctrl->cq) {
 		kfree(ctrl->sq);
 		ctrl->sq = NULL;
@@ -1685,8 +1691,7 @@ static int nvmet_pci_epf_process_sq(struct nvmet_pci_epf_ctrl *ctrl,
 		}
 
 		dev_dbg(ctrl->dev, "SQ[%u]: head %u, tail %u, command %s\n",
-			sq->qid, head, sq->tail,
-			nvmet_pci_epf_iod_name(iod));
+			sq->qid, head, sq->tail, nvmet_pci_epf_iod_name(iod));
 
 		head++;
 		if (head == sq->depth)
@@ -1763,7 +1768,6 @@ static void nvmet_pci_epf_cq_work(struct work_struct *work)
 	int ret = 0, n = 0;
 
 	while (test_bit(NVMET_PCI_EPF_Q_LIVE, &cq->flags) && ctrl->link_up) {
-
 		/* Check that the CQ is not full. */
 		cq->head = nvmet_pci_epf_bar_read32(ctrl, cq->db);
 		if (cq->head == cq->tail + 1) {
@@ -1800,8 +1804,8 @@ static void nvmet_pci_epf_cq_work(struct work_struct *work)
 			le64_to_cpu(cqe->result.u64), cq->head, cq->tail,
 			cq->phase);
 
-		memcpy_toio(cq->pci_map.virt_addr + cq->tail * cq->qes,
-			    cqe, cq->qes);
+		memcpy_toio(cq->pci_map.virt_addr + cq->tail * cq->qes, cqe,
+			    cq->qes);
 
 		cq->tail++;
 		if (cq->tail >= cq->depth) {
@@ -1880,9 +1884,9 @@ static int nvmet_pci_epf_enable_ctrl(struct nvmet_pci_epf_ctrl *ctrl)
 
 	qsize = (aqa & 0x0fff0000) >> 16;
 	pci_addr = acq & GENMASK_ULL(63, 12);
-	status = nvmet_pci_epf_create_cq(ctrl->tctrl, 0,
-				NVME_CQ_IRQ_ENABLED | NVME_QUEUE_PHYS_CONTIG,
-				qsize, pci_addr, 0);
+	status = nvmet_pci_epf_create_cq(
+		ctrl->tctrl, 0, NVME_CQ_IRQ_ENABLED | NVME_QUEUE_PHYS_CONTIG,
+		qsize, pci_addr, 0);
 	if (status != NVME_SC_SUCCESS) {
 		dev_err(ctrl->dev, "Failed to create admin completion queue\n");
 		goto err;
@@ -1890,8 +1894,8 @@ static int nvmet_pci_epf_enable_ctrl(struct nvmet_pci_epf_ctrl *ctrl)
 
 	qsize = aqa & 0x00000fff;
 	pci_addr = asq & GENMASK_ULL(63, 12);
-	status = nvmet_pci_epf_create_sq(ctrl->tctrl, 0, 0,
-			NVME_QUEUE_PHYS_CONTIG, qsize, pci_addr);
+	status = nvmet_pci_epf_create_sq(
+		ctrl->tctrl, 0, 0, NVME_QUEUE_PHYS_CONTIG, qsize, pci_addr);
 	if (status != NVME_SC_SUCCESS) {
 		dev_err(ctrl->dev, "Failed to create admin submission queue\n");
 		nvmet_pci_epf_delete_cq(ctrl->tctrl, 0);
@@ -2052,8 +2056,8 @@ static int nvmet_pci_epf_create_ctrl(struct nvmet_pci_epf *nvme_epf,
 
 	/* Create the target controller. */
 	uuid_gen(&id);
-	snprintf(hostnqn, NVMF_NQN_SIZE,
-		 "nqn.2014-08.org.nvmexpress:uuid:%pUb", &id);
+	snprintf(hostnqn, NVMF_NQN_SIZE, "nqn.2014-08.org.nvmexpress:uuid:%pUb",
+		 &id);
 	args.port = ctrl->port;
 	args.subsysnqn = nvme_epf->subsysnqn;
 	memset(&id, 0, sizeof(uuid_t));
@@ -2091,8 +2095,7 @@ static int nvmet_pci_epf_create_ctrl(struct nvmet_pci_epf *nvme_epf,
 	if (ret)
 		goto out_free_queues;
 
-	dev_info(ctrl->dev,
-		 "New PCI ctrl \"%s\", %u I/O queues, mdts %u B\n",
+	dev_info(ctrl->dev, "New PCI ctrl \"%s\", %u I/O queues, mdts %u B\n",
 		 ctrl->tctrl->subsys->subsysnqn, ctrl->nr_queues - 1,
 		 ctrl->mdts);
 
@@ -2113,7 +2116,6 @@ out_mempool_exit:
 
 static void nvmet_pci_epf_start_ctrl(struct nvmet_pci_epf_ctrl *ctrl)
 {
-
 	dev_info(ctrl->dev, "PCI link up\n");
 	ctrl->link_up = true;
 
@@ -2198,8 +2200,7 @@ static int nvmet_pci_epf_configure_bar(struct nvmet_pci_epf *nvme_epf)
 		if (reg_size > epc_features->bar[BAR_0].fixed_size) {
 			dev_err(&epf->dev,
 				"BAR 0 size %llu B too small, need %zu B\n",
-				epc_features->bar[BAR_0].fixed_size,
-				reg_size);
+				epc_features->bar[BAR_0].fixed_size, reg_size);
 			return -ENOMEM;
 		}
 		reg_bar_size = epc_features->bar[BAR_0].fixed_size;
@@ -2207,8 +2208,8 @@ static int nvmet_pci_epf_configure_bar(struct nvmet_pci_epf *nvme_epf)
 		reg_bar_size = ALIGN(reg_size, max(epc_features->align, 4096));
 	}
 
-	nvme_epf->reg_bar = pci_epf_alloc_space(epf, reg_bar_size, BAR_0,
-						epc_features, PRIMARY_INTERFACE);
+	nvme_epf->reg_bar = pci_epf_alloc_space(
+		epf, reg_bar_size, BAR_0, epc_features, PRIMARY_INTERFACE);
 	if (!nvme_epf->reg_bar) {
 		dev_err(&epf->dev, "Failed to allocate BAR 0\n");
 		return -ENOMEM;
@@ -2443,12 +2444,12 @@ static void nvmet_pci_epf_unbind(struct pci_epf *epf)
 }
 
 static struct pci_epf_header nvme_epf_pci_header = {
-	.vendorid	= PCI_ANY_ID,
-	.deviceid	= PCI_ANY_ID,
-	.progif_code	= 0x02, /* NVM Express */
+	.vendorid = PCI_ANY_ID,
+	.deviceid = PCI_ANY_ID,
+	.progif_code = 0x02, /* NVM Express */
 	.baseclass_code = PCI_BASE_CLASS_STORAGE,
-	.subclass_code	= 0x08, /* Non-Volatile Memory controller */
-	.interrupt_pin	= PCI_INTERRUPT_INTA,
+	.subclass_code = 0x08, /* Non-Volatile Memory controller */
+	.interrupt_pin = PCI_INTERRUPT_INTA,
 };
 
 static int nvmet_pci_epf_probe(struct pci_epf *epf,
@@ -2475,7 +2476,7 @@ static int nvmet_pci_epf_probe(struct pci_epf *epf,
 	return 0;
 }
 
-#define to_nvme_epf(epf_group)	\
+#define to_nvme_epf(epf_group) \
 	container_of(epf_group, struct nvmet_pci_epf, group)
 
 static ssize_t nvmet_pci_epf_portid_show(struct config_item *item, char *page)
@@ -2584,8 +2585,8 @@ static struct configfs_attribute *nvmet_pci_epf_attrs[] = {
 };
 
 static const struct config_item_type nvmet_pci_epf_group_type = {
-	.ct_attrs	= nvmet_pci_epf_attrs,
-	.ct_owner	= THIS_MODULE,
+	.ct_attrs = nvmet_pci_epf_attrs,
+	.ct_owner = THIS_MODULE,
 };
 
 static struct config_group *nvmet_pci_epf_add_cfs(struct pci_epf *epf,
@@ -2605,17 +2606,17 @@ static const struct pci_epf_device_id nvmet_pci_epf_ids[] = {
 };
 
 static struct pci_epf_ops nvmet_pci_epf_ops = {
-	.bind	= nvmet_pci_epf_bind,
-	.unbind	= nvmet_pci_epf_unbind,
+	.bind = nvmet_pci_epf_bind,
+	.unbind = nvmet_pci_epf_unbind,
 	.add_cfs = nvmet_pci_epf_add_cfs,
 };
 
 static struct pci_epf_driver nvmet_pci_epf_driver = {
-	.driver.name	= "nvmet_pci_epf",
-	.probe		= nvmet_pci_epf_probe,
-	.id_table	= nvmet_pci_epf_ids,
-	.ops		= &nvmet_pci_epf_ops,
-	.owner		= THIS_MODULE,
+	.driver.name = "nvmet_pci_epf",
+	.probe = nvmet_pci_epf_probe,
+	.id_table = nvmet_pci_epf_ids,
+	.ops = &nvmet_pci_epf_ops,
+	.owner = THIS_MODULE,
 };
 
 static int __init nvmet_pci_epf_init_module(void)

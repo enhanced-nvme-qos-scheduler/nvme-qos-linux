@@ -103,8 +103,9 @@ void nvmet_referral_disable(struct nvmet_port *parent, struct nvmet_port *port)
 }
 
 static void nvmet_format_discovery_entry(struct nvmf_disc_rsp_page_hdr *hdr,
-		struct nvmet_port *port, char *subsys_nqn, char *traddr,
-		u8 type, u32 numrec)
+					 struct nvmet_port *port,
+					 char *subsys_nqn, char *traddr,
+					 u8 type, u32 numrec)
 {
 	struct nvmf_disc_rsp_page_entry *e = &hdr->entries[numrec];
 
@@ -132,8 +133,8 @@ static void nvmet_format_discovery_entry(struct nvmf_disc_rsp_page_hdr *hdr,
  * from the req->port address in case the port in question listens
  * "any" IP address.
  */
-static void nvmet_set_disc_traddr(struct nvmet_req *req, struct nvmet_port *port,
-		char *traddr)
+static void nvmet_set_disc_traddr(struct nvmet_req *req,
+				  struct nvmet_port *port, char *traddr)
 {
 	if (req->ops->disc_traddr)
 		req->ops->disc_traddr(req, port, traddr);
@@ -209,8 +210,8 @@ static void nvmet_execute_disc_get_log_page(struct nvmet_req *req)
 	nvmet_set_disc_traddr(req, req->port, traddr);
 
 	nvmet_format_discovery_entry(hdr, req->port,
-				     nvmet_disc_subsys->subsysnqn,
-				     traddr, NVME_NQN_CURR, numrec);
+				     nvmet_disc_subsys->subsysnqn, traddr,
+				     NVME_NQN_CURR, numrec);
 	numrec++;
 
 	list_for_each_entry(p, &req->port->subsystems, entry) {
@@ -218,8 +219,8 @@ static void nvmet_execute_disc_get_log_page(struct nvmet_req *req)
 			continue;
 
 		nvmet_format_discovery_entry(hdr, req->port,
-				p->subsys->subsysnqn, traddr,
-				NVME_NQN_NVME, numrec);
+					     p->subsys->subsysnqn, traddr,
+					     NVME_NQN_NVME, numrec);
 		numrec++;
 	}
 
@@ -227,10 +228,9 @@ static void nvmet_execute_disc_get_log_page(struct nvmet_req *req)
 		if (r->disc_addr.trtype == NVMF_TRTYPE_PCI)
 			continue;
 
-		nvmet_format_discovery_entry(hdr, r,
-				NVME_DISC_SUBSYS_NAME,
-				r->disc_addr.traddr,
-				NVME_NQN_DISC, numrec);
+		nvmet_format_discovery_entry(hdr, r, NVME_DISC_SUBSYS_NAME,
+					     r->disc_addr.traddr, NVME_NQN_DISC,
+					     numrec);
 		numrec++;
 	}
 
@@ -273,8 +273,8 @@ static void nvmet_execute_disc_identify(struct nvmet_req *req)
 	memset(id->fr, ' ', sizeof(id->fr));
 	memcpy_and_pad(id->mn, sizeof(id->mn), ctrl->subsys->model_number,
 		       strlen(ctrl->subsys->model_number), ' ');
-	memcpy_and_pad(id->fr, sizeof(id->fr),
-		       UTS_RELEASE, strlen(UTS_RELEASE), ' ');
+	memcpy_and_pad(id->fr, sizeof(id->fr), UTS_RELEASE, strlen(UTS_RELEASE),
+		       ' ');
 
 	id->cntrltype = NVME_CTRL_DISC;
 
@@ -287,7 +287,7 @@ static void nvmet_execute_disc_identify(struct nvmet_req *req)
 	/* no enforcement soft-limit for maxcmd - pick arbitrary high value */
 	id->maxcmd = cpu_to_le16(NVMET_MAX_CMD(ctrl));
 
-	id->sgls = cpu_to_le32(1 << 0);	/* we always support SGLs */
+	id->sgls = cpu_to_le32(1 << 0); /* we always support SGLs */
 	if (ctrl->ops->flags & NVMF_KEYED_SGLS)
 		id->sgls |= cpu_to_le32(1 << 2);
 	if (req->port->inline_data_size)
@@ -321,8 +321,7 @@ static void nvmet_execute_disc_set_features(struct nvmet_req *req)
 						  NVMET_DISC_AEN_CFG_OPTIONAL);
 		break;
 	default:
-		req->error_loc =
-			offsetof(struct nvme_common_command, cdw10);
+		req->error_loc = offsetof(struct nvme_common_command, cdw10);
 		stat = NVME_SC_INVALID_FIELD | NVME_STATUS_DNR;
 		break;
 	}
@@ -346,8 +345,7 @@ static void nvmet_execute_disc_get_features(struct nvmet_req *req)
 		nvmet_get_feat_async_event(req);
 		break;
 	default:
-		req->error_loc =
-			offsetof(struct nvme_common_command, cdw10);
+		req->error_loc = offsetof(struct nvme_common_command, cdw10);
 		stat = NVME_SC_INVALID_FIELD | NVME_STATUS_DNR;
 		break;
 	}
@@ -374,10 +372,8 @@ u16 nvmet_parse_discovery_cmd(struct nvmet_req *req)
 	struct nvme_command *cmd = req->cmd;
 
 	if (unlikely(!(req->sq->ctrl->csts & NVME_CSTS_RDY))) {
-		pr_err("got cmd %d while not ready\n",
-		       cmd->common.opcode);
-		req->error_loc =
-			offsetof(struct nvme_common_command, opcode);
+		pr_err("got cmd %d while not ready\n", cmd->common.opcode);
+		req->error_loc = offsetof(struct nvme_common_command, opcode);
 		return NVME_SC_INVALID_OPCODE | NVME_STATUS_DNR;
 	}
 
@@ -405,7 +401,6 @@ u16 nvmet_parse_discovery_cmd(struct nvmet_req *req)
 		req->error_loc = offsetof(struct nvme_common_command, opcode);
 		return NVME_SC_INVALID_OPCODE | NVME_STATUS_DNR;
 	}
-
 }
 
 int __init nvmet_init_discovery(void)

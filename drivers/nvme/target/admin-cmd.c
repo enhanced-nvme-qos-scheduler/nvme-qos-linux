@@ -132,8 +132,8 @@ static void nvmet_execute_create_cq(struct nvmet_req *req)
 		goto complete;
 	}
 
-	status = ctrl->ops->create_cq(ctrl, cqid, cq_flags, qsize,
-				      prp1, irq_vector);
+	status = ctrl->ops->create_cq(ctrl, cqid, cq_flags, qsize, prp1,
+				      irq_vector);
 
 complete:
 	nvmet_req_complete(req, status);
@@ -185,7 +185,7 @@ static void nvmet_execute_get_log_page_error(struct nvmet_req *req)
 
 	for (i = 0; i < NVMET_ERROR_LOG_SLOTS; i++) {
 		if (nvmet_copy_to_sgl(req, offset, &ctrl->slots[slot],
-				sizeof(struct nvme_error_slot)))
+				      sizeof(struct nvme_error_slot)))
 			break;
 
 		if (slot == 0)
@@ -228,7 +228,7 @@ out:
 }
 
 static u16 nvmet_get_smart_log_nsid(struct nvmet_req *req,
-		struct nvme_smart_log *slog)
+				    struct nvme_smart_log *slog)
 {
 	u64 host_reads, host_writes, data_units_read, data_units_written;
 	u16 status;
@@ -242,11 +242,11 @@ static u16 nvmet_get_smart_log_nsid(struct nvmet_req *req,
 		return NVME_SC_SUCCESS;
 
 	host_reads = part_stat_read(req->ns->bdev, ios[READ]);
-	data_units_read =
-		DIV_ROUND_UP(part_stat_read(req->ns->bdev, sectors[READ]), 1000);
+	data_units_read = DIV_ROUND_UP(
+		part_stat_read(req->ns->bdev, sectors[READ]), 1000);
 	host_writes = part_stat_read(req->ns->bdev, ios[WRITE]);
-	data_units_written =
-		DIV_ROUND_UP(part_stat_read(req->ns->bdev, sectors[WRITE]), 1000);
+	data_units_written = DIV_ROUND_UP(
+		part_stat_read(req->ns->bdev, sectors[WRITE]), 1000);
 
 	put_unaligned_le64(host_reads, &slog->host_reads[0]);
 	put_unaligned_le64(data_units_read, &slog->data_units_read[0]);
@@ -257,7 +257,7 @@ static u16 nvmet_get_smart_log_nsid(struct nvmet_req *req,
 }
 
 static u16 nvmet_get_smart_log_all(struct nvmet_req *req,
-		struct nvme_smart_log *slog)
+				   struct nvme_smart_log *slog)
 {
 	u64 host_reads = 0, host_writes = 0;
 	u64 data_units_read = 0, data_units_written = 0;
@@ -266,7 +266,8 @@ static u16 nvmet_get_smart_log_all(struct nvmet_req *req,
 	unsigned long idx;
 
 	ctrl = req->sq->ctrl;
-	nvmet_for_each_enabled_ns(&ctrl->subsys->namespaces, idx, ns) {
+	nvmet_for_each_enabled_ns(&ctrl->subsys->namespaces, idx, ns)
+	{
 		/* we don't have the right data for file backed ns */
 		if (!ns->bdev)
 			continue;
@@ -292,8 +293,8 @@ static void nvmet_execute_get_log_page_rmi(struct nvmet_req *req)
 	struct gendisk *disk;
 	u16 status;
 
-	req->cmd->common.nsid = cpu_to_le32(le16_to_cpu(
-					    req->cmd->get_log_page.lsi));
+	req->cmd->common.nsid =
+		cpu_to_le32(le16_to_cpu(req->cmd->get_log_page.lsi));
 	status = nvmet_req_find_ns(req);
 	if (status)
 		goto out;
@@ -347,7 +348,7 @@ static void nvmet_execute_get_log_page_smart(struct nvmet_req *req)
 
 	spin_lock_irqsave(&req->sq->ctrl->error_lock, flags);
 	put_unaligned_le64(req->sq->ctrl->err_counter,
-			&log->num_err_log_entries);
+			   &log->num_err_log_entries);
 	spin_unlock_irqrestore(&req->sq->ctrl->error_lock, flags);
 
 	status = nvmet_copy_to_sgl(req, 0, log, sizeof(*log));
@@ -362,42 +363,37 @@ static void nvmet_get_cmd_effects_admin(struct nvmet_ctrl *ctrl,
 {
 	/* For a PCI target controller, advertize support for the . */
 	if (nvmet_is_pci_ctrl(ctrl)) {
-		log->acs[nvme_admin_delete_sq] =
-		log->acs[nvme_admin_create_sq] =
-		log->acs[nvme_admin_delete_cq] =
-		log->acs[nvme_admin_create_cq] =
-			cpu_to_le32(NVME_CMD_EFFECTS_CSUPP);
+		log->acs[nvme_admin_delete_sq] = log->acs[nvme_admin_create_sq] =
+			log->acs[nvme_admin_delete_cq] =
+				log->acs[nvme_admin_create_cq] =
+					cpu_to_le32(NVME_CMD_EFFECTS_CSUPP);
 	}
 
-	log->acs[nvme_admin_get_log_page] =
-	log->acs[nvme_admin_identify] =
-	log->acs[nvme_admin_abort_cmd] =
-	log->acs[nvme_admin_set_features] =
-	log->acs[nvme_admin_get_features] =
-	log->acs[nvme_admin_async_event] =
-	log->acs[nvme_admin_keep_alive] =
-		cpu_to_le32(NVME_CMD_EFFECTS_CSUPP);
+	log->acs[nvme_admin_get_log_page] = log->acs[nvme_admin_identify] =
+		log->acs[nvme_admin_abort_cmd] = log->acs[nvme_admin_set_features] =
+			log->acs[nvme_admin_get_features] =
+				log->acs[nvme_admin_async_event] =
+					log->acs[nvme_admin_keep_alive] =
+						cpu_to_le32(
+							NVME_CMD_EFFECTS_CSUPP);
 }
 
 static void nvmet_get_cmd_effects_nvm(struct nvme_effects_log *log)
 {
-	log->iocs[nvme_cmd_read] =
-	log->iocs[nvme_cmd_flush] =
-	log->iocs[nvme_cmd_dsm]	=
-	log->iocs[nvme_cmd_resv_acquire] =
-	log->iocs[nvme_cmd_resv_register] =
-	log->iocs[nvme_cmd_resv_release] =
-	log->iocs[nvme_cmd_resv_report] =
-		cpu_to_le32(NVME_CMD_EFFECTS_CSUPP);
-	log->iocs[nvme_cmd_write] =
-	log->iocs[nvme_cmd_write_zeroes] =
+	log->iocs[nvme_cmd_read] = log->iocs[nvme_cmd_flush] =
+		log->iocs[nvme_cmd_dsm] = log->iocs[nvme_cmd_resv_acquire] =
+			log->iocs[nvme_cmd_resv_register] =
+				log->iocs[nvme_cmd_resv_release] =
+					log->iocs[nvme_cmd_resv_report] =
+						cpu_to_le32(
+							NVME_CMD_EFFECTS_CSUPP);
+	log->iocs[nvme_cmd_write] = log->iocs[nvme_cmd_write_zeroes] =
 		cpu_to_le32(NVME_CMD_EFFECTS_CSUPP | NVME_CMD_EFFECTS_LBCC);
 }
 
 static void nvmet_get_cmd_effects_zns(struct nvme_effects_log *log)
 {
-	log->iocs[nvme_cmd_zone_append] =
-	log->iocs[nvme_cmd_zone_mgmt_send] =
+	log->iocs[nvme_cmd_zone_append] = log->iocs[nvme_cmd_zone_mgmt_send] =
 		cpu_to_le32(NVME_CMD_EFFECTS_CSUPP | NVME_CMD_EFFECTS_LBCC);
 	log->iocs[nvme_cmd_zone_mgmt_recv] =
 		cpu_to_le32(NVME_CMD_EFFECTS_CSUPP);
@@ -466,7 +462,7 @@ out:
 }
 
 static u32 nvmet_format_ana_group(struct nvmet_req *req, u32 grpid,
-		struct nvme_ana_group_desc *desc)
+				  struct nvme_ana_group_desc *desc)
 {
 	struct nvmet_ctrl *ctrl = req->sq->ctrl;
 	struct nvmet_ns *ns;
@@ -474,7 +470,8 @@ static u32 nvmet_format_ana_group(struct nvmet_req *req, u32 grpid,
 	u32 count = 0;
 
 	if (!(req->cmd->get_log_page.lsp & NVME_ANA_LOG_RGO)) {
-		nvmet_for_each_enabled_ns(&ctrl->subsys->namespaces, idx, ns) {
+		nvmet_for_each_enabled_ns(&ctrl->subsys->namespaces, idx, ns)
+		{
 			if (ns->anagrpid == grpid)
 				desc->nsids[count++] = cpu_to_le32(ns->nsid);
 		}
@@ -498,8 +495,8 @@ static void nvmet_execute_get_log_page_endgrp(struct nvmet_req *req)
 	 * The target driver emulates each endurance group as its own
 	 * namespace, reusing the nsid as the endurance group identifier.
 	 */
-	req->cmd->common.nsid = cpu_to_le32(le16_to_cpu(
-					    req->cmd->get_log_page.lsi));
+	req->cmd->common.nsid =
+		cpu_to_le32(le16_to_cpu(req->cmd->get_log_page.lsi));
 	status = nvmet_req_find_ns(req);
 	if (status)
 		goto out;
@@ -514,11 +511,11 @@ static void nvmet_execute_get_log_page_endgrp(struct nvmet_req *req)
 		goto copy;
 
 	host_reads = part_stat_read(req->ns->bdev, ios[READ]);
-	data_units_read =
-		DIV_ROUND_UP(part_stat_read(req->ns->bdev, sectors[READ]), 1000);
+	data_units_read = DIV_ROUND_UP(
+		part_stat_read(req->ns->bdev, sectors[READ]), 1000);
 	host_writes = part_stat_read(req->ns->bdev, ios[WRITE]);
-	data_units_written =
-		DIV_ROUND_UP(part_stat_read(req->ns->bdev, sectors[WRITE]), 1000);
+	data_units_written = DIV_ROUND_UP(
+		part_stat_read(req->ns->bdev, sectors[WRITE]), 1000);
 
 	put_unaligned_le64(host_reads, &log->hrc[0]);
 	put_unaligned_le64(data_units_read, &log->dur[0]);
@@ -533,7 +530,9 @@ out:
 
 static void nvmet_execute_get_log_page_ana(struct nvmet_req *req)
 {
-	struct nvme_ana_rsp_hdr hdr = { 0, };
+	struct nvme_ana_rsp_hdr hdr = {
+		0,
+	};
 	struct nvme_ana_group_desc *desc;
 	size_t offset = sizeof(struct nvme_ana_rsp_hdr); /* start beyond hdr */
 	size_t len;
@@ -558,7 +557,7 @@ static void nvmet_execute_get_log_page_ana(struct nvmet_req *req)
 		offset += len;
 		ngrps++;
 	}
-	for ( ; grpid <= NVMET_MAX_ANAGRPS; grpid++) {
+	for (; grpid <= NVMET_MAX_ANAGRPS; grpid++) {
 		if (nvmet_ana_group_enabled[grpid])
 			ngrps++;
 	}
@@ -640,8 +639,8 @@ static void nvmet_execute_get_log_page(struct nvmet_req *req)
 	case NVME_LOG_RESERVATION:
 		return nvmet_execute_get_log_page_resv(req);
 	}
-	pr_debug("unhandled lid %d on qid %d\n",
-	       req->cmd->get_log_page.lid, req->sq->qid);
+	pr_debug("unhandled lid %d on qid %d\n", req->cmd->get_log_page.lid,
+		 req->sq->qid);
 	req->error_loc = offsetof(struct nvme_get_log_page_command, lid);
 	nvmet_req_complete(req, NVME_SC_INVALID_FIELD | NVME_STATUS_DNR);
 }
@@ -672,8 +671,8 @@ static void nvmet_execute_identify_ctrl(struct nvmet_req *req)
 	memcpy(id->sn, ctrl->subsys->serial, NVMET_SN_MAX_SIZE);
 	memcpy_and_pad(id->mn, sizeof(id->mn), subsys->model_number,
 		       strlen(subsys->model_number), ' ');
-	memcpy_and_pad(id->fr, sizeof(id->fr),
-		       subsys->firmware_rev, strlen(subsys->firmware_rev), ' ');
+	memcpy_and_pad(id->fr, sizeof(id->fr), subsys->firmware_rev,
+		       strlen(subsys->firmware_rev), ' ');
 
 	put_unaligned_le24(subsys->ieee_oui, id->ieee);
 
@@ -686,7 +685,7 @@ static void nvmet_execute_identify_ctrl(struct nvmet_req *req)
 
 	/* we support multiple ports, multiples hosts and ANA: */
 	id->cmic = NVME_CTRL_CMIC_MULTI_PORT | NVME_CTRL_CMIC_MULTI_CTRL |
-		NVME_CTRL_CMIC_ANA;
+		   NVME_CTRL_CMIC_ANA;
 
 	/* Limit MDTS according to transport capability */
 	if (ctrl->ops->get_mdts)
@@ -732,9 +731,9 @@ static void nvmet_execute_identify_ctrl(struct nvmet_req *req)
 
 	id->nn = cpu_to_le32(NVMET_MAX_NAMESPACES);
 	id->mnan = cpu_to_le32(NVMET_MAX_NAMESPACES);
-	id->oncs = cpu_to_le16(NVME_CTRL_ONCS_DSM |
-			NVME_CTRL_ONCS_WRITE_ZEROES |
-			NVME_CTRL_ONCS_RESERVATIONS);
+	id->oncs =
+		cpu_to_le16(NVME_CTRL_ONCS_DSM | NVME_CTRL_ONCS_WRITE_ZEROES |
+			    NVME_CTRL_ONCS_RESERVATIONS);
 
 	/* XXX: don't report vwc if the underlying device is write through */
 	id->vwc = NVME_CTRL_VWC_PRESENT;
@@ -862,12 +861,12 @@ static void nvmet_execute_identify_ns(struct nvmet_req *req)
 
 	if (req->ns->pr.enable)
 		id->rescap = NVME_PR_SUPPORT_WRITE_EXCLUSIVE |
-			NVME_PR_SUPPORT_EXCLUSIVE_ACCESS |
-			NVME_PR_SUPPORT_WRITE_EXCLUSIVE_REG_ONLY |
-			NVME_PR_SUPPORT_EXCLUSIVE_ACCESS_REG_ONLY |
-			NVME_PR_SUPPORT_WRITE_EXCLUSIVE_ALL_REGS |
-			NVME_PR_SUPPORT_EXCLUSIVE_ACCESS_ALL_REGS |
-			NVME_PR_SUPPORT_IEKEY_VER_1_3_DEF;
+			     NVME_PR_SUPPORT_EXCLUSIVE_ACCESS |
+			     NVME_PR_SUPPORT_WRITE_EXCLUSIVE_REG_ONLY |
+			     NVME_PR_SUPPORT_EXCLUSIVE_ACCESS_REG_ONLY |
+			     NVME_PR_SUPPORT_WRITE_EXCLUSIVE_ALL_REGS |
+			     NVME_PR_SUPPORT_EXCLUSIVE_ACCESS_ALL_REGS |
+			     NVME_PR_SUPPORT_IEKEY_VER_1_3_DEF;
 
 	/*
 	 * Since we don't know any better, every namespace is its own endurance
@@ -917,7 +916,8 @@ static void nvmet_execute_identify_endgrp_list(struct nvmet_req *req)
 		goto out;
 	}
 
-	nvmet_for_each_enabled_ns(&ctrl->subsys->namespaces, idx, ns) {
+	nvmet_for_each_enabled_ns(&ctrl->subsys->namespaces, idx, ns)
+	{
 		if (ns->nsid <= min_endgid)
 			continue;
 
@@ -960,7 +960,8 @@ static void nvmet_execute_identify_nslist(struct nvmet_req *req, bool match_css)
 		goto out;
 	}
 
-	nvmet_for_each_enabled_ns(&ctrl->subsys->namespaces, idx, ns) {
+	nvmet_for_each_enabled_ns(&ctrl->subsys->namespaces, idx, ns)
+	{
 		if (ns->nsid <= min_nsid)
 			continue;
 		if (match_css && req->ns->csi != req->cmd->identify.csi)
@@ -1023,14 +1024,13 @@ static void nvmet_execute_identify_desclist(struct nvmet_req *req)
 			goto out;
 	}
 
-	status = nvmet_copy_ns_identifier(req, NVME_NIDT_CSI,
-					  NVME_NIDT_CSI_LEN,
+	status = nvmet_copy_ns_identifier(req, NVME_NIDT_CSI, NVME_NIDT_CSI_LEN,
 					  &req->ns->csi, &off);
 	if (status)
 		goto out;
 
 	if (sg_zero_buffer(req->sg, req->sg_cnt, NVME_IDENTIFY_DATA_SIZE - off,
-			off) != NVME_IDENTIFY_DATA_SIZE - off)
+			   off) != NVME_IDENTIFY_DATA_SIZE - off)
 		status = NVME_SC_INTERNAL | NVME_STATUS_DNR;
 
 out:
@@ -1040,8 +1040,8 @@ out:
 static void nvmet_execute_identify_ctrl_nvm(struct nvmet_req *req)
 {
 	/* Not supported: return zeroes */
-	nvmet_req_complete(req,
-		   nvmet_zero_sgl(req, 0, sizeof(struct nvme_id_ctrl_nvm)));
+	nvmet_req_complete(
+		req, nvmet_zero_sgl(req, 0, sizeof(struct nvme_id_ctrl_nvm)));
 }
 
 static void nvme_execute_identify_ns_nvm(struct nvmet_req *req)
@@ -1156,7 +1156,7 @@ static void nvmet_execute_identify(struct nvmet_req *req)
 	}
 
 	pr_debug("unhandled identify cns %d on qid %d\n",
-	       req->cmd->identify.cns, req->sq->qid);
+		 req->cmd->identify.cns, req->sq->qid);
 	req->error_loc = offsetof(struct nvme_identify, cns);
 	nvmet_req_complete(req, NVME_SC_INVALID_FIELD | NVME_STATUS_DNR);
 }
@@ -1359,8 +1359,8 @@ void nvmet_execute_set_features(struct nvmet_req *req)
 			status = NVME_SC_INVALID_FIELD | NVME_STATUS_DNR;
 			break;
 		}
-		nvmet_set_result(req,
-			(subsys->max_qid - 1) | ((subsys->max_qid - 1) << 16));
+		nvmet_set_result(req, (subsys->max_qid - 1) |
+					      ((subsys->max_qid - 1) << 16));
 		break;
 	case NVME_FEAT_IRQ_COALESCE:
 		status = nvmet_set_feat_irq_coalesce(req);
@@ -1415,7 +1415,7 @@ static u16 nvmet_get_feat_write_protect(struct nvmet_req *req)
 static u16 nvmet_get_feat_irq_coalesce(struct nvmet_req *req)
 {
 	struct nvmet_ctrl *ctrl = req->sq->ctrl;
-	struct nvmet_feat_irq_coalesce irqc = { };
+	struct nvmet_feat_irq_coalesce irqc = {};
 	u16 status;
 
 	/*
@@ -1464,7 +1464,7 @@ static u16 nvmet_get_feat_irq_config(struct nvmet_req *req)
 static u16 nvmet_get_feat_arbitration(struct nvmet_req *req)
 {
 	struct nvmet_ctrl *ctrl = req->sq->ctrl;
-	struct nvmet_feat_arbitration arb = { };
+	struct nvmet_feat_arbitration arb = {};
 	u16 status;
 
 	if (!ctrl->ops->get_feature) {
@@ -1476,11 +1476,8 @@ static u16 nvmet_get_feat_arbitration(struct nvmet_req *req)
 	if (status != NVME_SC_SUCCESS)
 		return status;
 
-	nvmet_set_result(req,
-			 ((u32)arb.hpw << 24) |
-			 ((u32)arb.mpw << 16) |
-			 ((u32)arb.lpw << 8) |
-			 (arb.ab & 0x3));
+	nvmet_set_result(req, ((u32)arb.hpw << 24) | ((u32)arb.mpw << 16) |
+				      ((u32)arb.lpw << 8) | (arb.ab & 0x3));
 
 	return NVME_SC_SUCCESS;
 }
@@ -1505,7 +1502,7 @@ void nvmet_execute_get_features(struct nvmet_req *req)
 		return;
 
 	switch (cdw10 & 0xff) {
-	/*
+		/*
 	 * These features are mandatory in the spec, but we don't
 	 * have a useful way to implement them.  We'll eventually
 	 * need to come up with some fake values for these.
@@ -1536,8 +1533,8 @@ void nvmet_execute_get_features(struct nvmet_req *req)
 		nvmet_set_result(req, 1);
 		break;
 	case NVME_FEAT_NUM_QUEUES:
-		nvmet_set_result(req,
-			(subsys->max_qid-1) | ((subsys->max_qid-1) << 16));
+		nvmet_set_result(req, (subsys->max_qid - 1) |
+					      ((subsys->max_qid - 1) << 16));
 		break;
 	case NVME_FEAT_KATO:
 		nvmet_get_feat_kato(req);
@@ -1552,7 +1549,7 @@ void nvmet_execute_get_features(struct nvmet_req *req)
 		}
 
 		status = nvmet_copy_to_sgl(req, 0, &req->sq->ctrl->hostid,
-				sizeof(req->sq->ctrl->hostid));
+					   sizeof(req->sq->ctrl->hostid));
 		break;
 	case NVME_FEAT_WRITE_PROTECT:
 		status = nvmet_get_feat_write_protect(req);
@@ -1561,8 +1558,7 @@ void nvmet_execute_get_features(struct nvmet_req *req)
 		status = nvmet_get_feat_resv_notif_mask(req);
 		break;
 	default:
-		req->error_loc =
-			offsetof(struct nvme_common_command, cdw10);
+		req->error_loc = offsetof(struct nvme_common_command, cdw10);
 		status = NVME_SC_INVALID_FIELD | NVME_STATUS_DNR;
 		break;
 	}
@@ -1602,8 +1598,8 @@ void nvmet_execute_keep_alive(struct nvmet_req *req)
 		goto out;
 	}
 
-	pr_debug("ctrl %d update keep-alive timer for %d secs\n",
-		ctrl->cntlid, ctrl->kato);
+	pr_debug("ctrl %d update keep-alive timer for %d secs\n", ctrl->cntlid,
+		 ctrl->kato);
 	mod_delayed_work(system_wq, &ctrl->ka_work, ctrl->kato * HZ);
 out:
 	nvmet_req_complete(req, status);

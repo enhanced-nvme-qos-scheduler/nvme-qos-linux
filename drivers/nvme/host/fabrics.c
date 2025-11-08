@@ -90,8 +90,8 @@ static struct nvmf_host *nvmf_host_default(void)
 	uuid_t id;
 
 	uuid_gen(&id);
-	snprintf(nqn, NVMF_NQN_SIZE,
-		"nqn.2014-08.org.nvmexpress:uuid:%pUb", &id);
+	snprintf(nqn, NVMF_NQN_SIZE, "nqn.2014-08.org.nvmexpress:uuid:%pUb",
+		 &id);
 
 	host = nvmf_host_alloc(nqn, &id);
 	if (!host)
@@ -135,13 +135,13 @@ int nvmf_get_address(struct nvme_ctrl *ctrl, char *buf, int size)
 		len += scnprintf(buf, size, "traddr=%s", ctrl->opts->traddr);
 	if (ctrl->opts->mask & NVMF_OPT_TRSVCID)
 		len += scnprintf(buf + len, size - len, "%strsvcid=%s",
-				(len) ? "," : "", ctrl->opts->trsvcid);
+				 (len) ? "," : "", ctrl->opts->trsvcid);
 	if (ctrl->opts->mask & NVMF_OPT_HOST_TRADDR)
 		len += scnprintf(buf + len, size - len, "%shost_traddr=%s",
-				(len) ? "," : "", ctrl->opts->host_traddr);
+				 (len) ? "," : "", ctrl->opts->host_traddr);
 	if (ctrl->opts->mask & NVMF_OPT_HOST_IFACE)
 		len += scnprintf(buf + len, size - len, "%shost_iface=%s",
-				(len) ? "," : "", ctrl->opts->host_iface);
+				 (len) ? "," : "", ctrl->opts->host_iface);
 	len += scnprintf(buf + len, size - len, "\n");
 
 	return len;
@@ -171,7 +171,7 @@ EXPORT_SYMBOL_GPL(nvmf_get_address);
  */
 int nvmf_reg_read32(struct nvme_ctrl *ctrl, u32 off, u32 *val)
 {
-	struct nvme_command cmd = { };
+	struct nvme_command cmd = {};
 	union nvme_result res;
 	int ret;
 
@@ -180,13 +180,12 @@ int nvmf_reg_read32(struct nvme_ctrl *ctrl, u32 off, u32 *val)
 	cmd.prop_get.offset = cpu_to_le32(off);
 
 	ret = __nvme_submit_sync_cmd(ctrl->fabrics_q, &cmd, &res, NULL, 0,
-			NVME_QID_ANY, NVME_SUBMIT_RESERVED);
+				     NVME_QID_ANY, NVME_SUBMIT_RESERVED);
 
 	if (ret >= 0)
 		*val = le64_to_cpu(res.u64);
 	if (unlikely(ret != 0))
-		dev_err(ctrl->device,
-			"Property Get error: %d, offset %#x\n",
+		dev_err(ctrl->device, "Property Get error: %d, offset %#x\n",
 			ret > 0 ? ret & ~NVME_STATUS_DNR : ret, off);
 
 	return ret;
@@ -216,7 +215,7 @@ EXPORT_SYMBOL_GPL(nvmf_reg_read32);
  */
 int nvmf_reg_read64(struct nvme_ctrl *ctrl, u32 off, u64 *val)
 {
-	struct nvme_command cmd = { };
+	struct nvme_command cmd = {};
 	union nvme_result res;
 	int ret;
 
@@ -226,13 +225,12 @@ int nvmf_reg_read64(struct nvme_ctrl *ctrl, u32 off, u64 *val)
 	cmd.prop_get.offset = cpu_to_le32(off);
 
 	ret = __nvme_submit_sync_cmd(ctrl->fabrics_q, &cmd, &res, NULL, 0,
-			NVME_QID_ANY, NVME_SUBMIT_RESERVED);
+				     NVME_QID_ANY, NVME_SUBMIT_RESERVED);
 
 	if (ret >= 0)
 		*val = le64_to_cpu(res.u64);
 	if (unlikely(ret != 0))
-		dev_err(ctrl->device,
-			"Property Get error: %d, offset %#x\n",
+		dev_err(ctrl->device, "Property Get error: %d, offset %#x\n",
 			ret > 0 ? ret & ~NVME_STATUS_DNR : ret, off);
 	return ret;
 }
@@ -261,7 +259,7 @@ EXPORT_SYMBOL_GPL(nvmf_reg_read64);
  */
 int nvmf_reg_write32(struct nvme_ctrl *ctrl, u32 off, u32 val)
 {
-	struct nvme_command cmd = { };
+	struct nvme_command cmd = {};
 	int ret;
 
 	cmd.prop_set.opcode = nvme_fabrics_command;
@@ -271,10 +269,9 @@ int nvmf_reg_write32(struct nvme_ctrl *ctrl, u32 off, u32 val)
 	cmd.prop_set.value = cpu_to_le64(val);
 
 	ret = __nvme_submit_sync_cmd(ctrl->fabrics_q, &cmd, NULL, NULL, 0,
-			NVME_QID_ANY, NVME_SUBMIT_RESERVED);
+				     NVME_QID_ANY, NVME_SUBMIT_RESERVED);
 	if (unlikely(ret))
-		dev_err(ctrl->device,
-			"Property Set error: %d, offset %#x\n",
+		dev_err(ctrl->device, "Property Set error: %d, offset %#x\n",
 			ret > 0 ? ret & ~NVME_STATUS_DNR : ret, off);
 	return ret;
 }
@@ -306,15 +303,15 @@ EXPORT_SYMBOL_GPL(nvmf_subsystem_reset);
  * @cmd:	This is the SQE portion of a submission capsule.
  * @data:	This is the "Data" portion of a submission capsule.
  */
-static void nvmf_log_connect_error(struct nvme_ctrl *ctrl,
-		int errval, int offset, struct nvme_command *cmd,
-		struct nvmf_connect_data *data)
+static void nvmf_log_connect_error(struct nvme_ctrl *ctrl, int errval,
+				   int offset, struct nvme_command *cmd,
+				   struct nvmf_connect_data *data)
 {
 	int err_sctype = errval & ~NVME_STATUS_DNR;
 
 	if (errval < 0) {
-		dev_err(ctrl->device,
-			"Connect command failed, errno: %d\n", errval);
+		dev_err(ctrl->device, "Connect command failed, errno: %d\n",
+			errval);
 		return;
 	}
 
@@ -325,24 +322,21 @@ static void nvmf_log_connect_error(struct nvme_ctrl *ctrl,
 
 			switch (offset & 0xffff) {
 			case (offsetof(struct nvmf_connect_data, cntlid)):
-				dev_err(ctrl->device,
-					"%s, cntlid: %d\n",
+				dev_err(ctrl->device, "%s, cntlid: %d\n",
 					inv_data, data->cntlid);
 				break;
 			case (offsetof(struct nvmf_connect_data, hostnqn)):
-				dev_err(ctrl->device,
-					"%s, hostnqn \"%s\"\n",
+				dev_err(ctrl->device, "%s, hostnqn \"%s\"\n",
 					inv_data, data->hostnqn);
 				break;
 			case (offsetof(struct nvmf_connect_data, subsysnqn)):
-				dev_err(ctrl->device,
-					"%s, subsysnqn \"%s\"\n",
+				dev_err(ctrl->device, "%s, subsysnqn \"%s\"\n",
 					inv_data, data->subsysnqn);
 				break;
 			default:
 				dev_err(ctrl->device,
 					"%s, starting byte offset: %d\n",
-				       inv_data, offset & 0xffff);
+					inv_data, offset & 0xffff);
 				break;
 			}
 		} else {
@@ -350,9 +344,8 @@ static void nvmf_log_connect_error(struct nvme_ctrl *ctrl,
 
 			switch (offset) {
 			case (offsetof(struct nvmf_connect_command, qid)):
-				dev_err(ctrl->device,
-				       "%s, qid %d\n",
-					inv_sqe, cmd->connect.qid);
+				dev_err(ctrl->device, "%s, qid %d\n", inv_sqe,
+					cmd->connect.qid);
 				break;
 			default:
 				dev_err(ctrl->device,
@@ -371,8 +364,7 @@ static void nvmf_log_connect_error(struct nvme_ctrl *ctrl,
 			"Connect command failed: controller is busy or not available\n");
 		break;
 	case NVME_SC_CONNECT_FORMAT:
-		dev_err(ctrl->device,
-			"Connect incompatible format: %d",
+		dev_err(ctrl->device, "Connect incompatible format: %d",
 			cmd->connect.recfmt);
 		break;
 	case NVME_SC_HOST_PATH_ERROR:
@@ -392,7 +384,7 @@ static void nvmf_log_connect_error(struct nvme_ctrl *ctrl,
 }
 
 static struct nvmf_connect_data *nvmf_connect_data_prep(struct nvme_ctrl *ctrl,
-		u16 cntlid)
+							u16 cntlid)
 {
 	struct nvmf_connect_data *data;
 
@@ -409,7 +401,7 @@ static struct nvmf_connect_data *nvmf_connect_data_prep(struct nvme_ctrl *ctrl,
 }
 
 static void nvmf_connect_cmd_prep(struct nvme_ctrl *ctrl, u16 qid,
-		struct nvme_command *cmd)
+				  struct nvme_command *cmd)
 {
 	cmd->connect.opcode = nvme_fabrics_command;
 	cmd->connect.fctype = nvme_fabrics_type_connect;
@@ -446,7 +438,7 @@ static void nvmf_connect_cmd_prep(struct nvme_ctrl *ctrl, u16 qid,
  */
 int nvmf_connect_admin_queue(struct nvme_ctrl *ctrl)
 {
-	struct nvme_command cmd = { };
+	struct nvme_command cmd = {};
 	union nvme_result res;
 	struct nvmf_connect_data *data;
 	int ret;
@@ -458,14 +450,13 @@ int nvmf_connect_admin_queue(struct nvme_ctrl *ctrl)
 	if (!data)
 		return -ENOMEM;
 
-	ret = __nvme_submit_sync_cmd(ctrl->fabrics_q, &cmd, &res,
-			data, sizeof(*data), NVME_QID_ANY,
-			NVME_SUBMIT_AT_HEAD |
-			NVME_SUBMIT_NOWAIT |
-			NVME_SUBMIT_RESERVED);
+	ret = __nvme_submit_sync_cmd(ctrl->fabrics_q, &cmd, &res, data,
+				     sizeof(*data), NVME_QID_ANY,
+				     NVME_SUBMIT_AT_HEAD | NVME_SUBMIT_NOWAIT |
+					     NVME_SUBMIT_RESERVED);
 	if (ret) {
-		nvmf_log_connect_error(ctrl, ret, le32_to_cpu(res.u32),
-				       &cmd, data);
+		nvmf_log_connect_error(ctrl, ret, le32_to_cpu(res.u32), &cmd,
+				       data);
 		goto out_free_data;
 	}
 
@@ -475,8 +466,9 @@ int nvmf_connect_admin_queue(struct nvme_ctrl *ctrl)
 		/* Check for secure concatenation */
 		if ((result & NVME_CONNECT_AUTHREQ_ASCR) &&
 		    !ctrl->opts->concat) {
-			dev_warn(ctrl->device,
-				 "qid 0: secure concatenation is not supported\n");
+			dev_warn(
+				ctrl->device,
+				"qid 0: secure concatenation is not supported\n");
 			ret = -EOPNOTSUPP;
 			goto out_free_data;
 		}
@@ -493,8 +485,7 @@ int nvmf_connect_admin_queue(struct nvme_ctrl *ctrl)
 				 "qid 0: authentication failed, error %d\n",
 				 ret);
 		} else
-			dev_info(ctrl->device,
-				 "qid 0: authenticated\n");
+			dev_info(ctrl->device, "qid 0: authenticated\n");
 	}
 out_free_data:
 	kfree(data);
@@ -524,7 +515,7 @@ EXPORT_SYMBOL_GPL(nvmf_connect_admin_queue);
  */
 int nvmf_connect_io_queue(struct nvme_ctrl *ctrl, u16 qid)
 {
-	struct nvme_command cmd = { };
+	struct nvme_command cmd = {};
 	struct nvmf_connect_data *data;
 	union nvme_result res;
 	int ret;
@@ -536,22 +527,23 @@ int nvmf_connect_io_queue(struct nvme_ctrl *ctrl, u16 qid)
 	if (!data)
 		return -ENOMEM;
 
-	ret = __nvme_submit_sync_cmd(ctrl->connect_q, &cmd, &res,
-			data, sizeof(*data), qid,
-			NVME_SUBMIT_AT_HEAD |
-			NVME_SUBMIT_RESERVED |
+	ret = __nvme_submit_sync_cmd(
+		ctrl->connect_q, &cmd, &res, data, sizeof(*data), qid,
+		NVME_SUBMIT_AT_HEAD | NVME_SUBMIT_RESERVED |
 			NVME_SUBMIT_NOWAIT);
 	if (ret) {
-		nvmf_log_connect_error(ctrl, ret, le32_to_cpu(res.u32),
-				       &cmd, data);
+		nvmf_log_connect_error(ctrl, ret, le32_to_cpu(res.u32), &cmd,
+				       data);
 		goto out_free_data;
 	}
 	result = le32_to_cpu(res.u32);
 	if (result & (NVME_CONNECT_AUTHREQ_ATR | NVME_CONNECT_AUTHREQ_ASCR)) {
 		/* Secure concatenation is not implemented */
 		if (result & NVME_CONNECT_AUTHREQ_ASCR) {
-			dev_warn(ctrl->device,
-				 "qid %d: secure concatenation is not supported\n", qid);
+			dev_warn(
+				ctrl->device,
+				"qid %d: secure concatenation is not supported\n",
+				qid);
 			ret = -EOPNOTSUPP;
 			goto out_free_data;
 		}
@@ -642,8 +634,8 @@ void nvmf_unregister_transport(struct nvmf_transport_ops *ops)
 }
 EXPORT_SYMBOL_GPL(nvmf_unregister_transport);
 
-static struct nvmf_transport_ops *nvmf_lookup_transport(
-		struct nvmf_ctrl_options *opts)
+static struct nvmf_transport_ops *
+nvmf_lookup_transport(struct nvmf_ctrl_options *opts)
 {
 	struct nvmf_transport_ops *ops;
 
@@ -675,50 +667,49 @@ static struct key *nvmf_parse_key(int key_id)
 }
 
 static const match_table_t opt_tokens = {
-	{ NVMF_OPT_TRANSPORT,		"transport=%s"		},
-	{ NVMF_OPT_TRADDR,		"traddr=%s"		},
-	{ NVMF_OPT_TRSVCID,		"trsvcid=%s"		},
-	{ NVMF_OPT_NQN,			"nqn=%s"		},
-	{ NVMF_OPT_QUEUE_SIZE,		"queue_size=%d"		},
-	{ NVMF_OPT_NR_IO_QUEUES,	"nr_io_queues=%d"	},
-	{ NVMF_OPT_RECONNECT_DELAY,	"reconnect_delay=%d"	},
-	{ NVMF_OPT_CTRL_LOSS_TMO,	"ctrl_loss_tmo=%d"	},
-	{ NVMF_OPT_KATO,		"keep_alive_tmo=%d"	},
-	{ NVMF_OPT_HOSTNQN,		"hostnqn=%s"		},
-	{ NVMF_OPT_HOST_TRADDR,		"host_traddr=%s"	},
-	{ NVMF_OPT_HOST_IFACE,		"host_iface=%s"		},
-	{ NVMF_OPT_HOST_ID,		"hostid=%s"		},
-	{ NVMF_OPT_DUP_CONNECT,		"duplicate_connect"	},
-	{ NVMF_OPT_DISABLE_SQFLOW,	"disable_sqflow"	},
-	{ NVMF_OPT_HDR_DIGEST,		"hdr_digest"		},
-	{ NVMF_OPT_DATA_DIGEST,		"data_digest"		},
-	{ NVMF_OPT_NR_WRITE_QUEUES,	"nr_write_queues=%d"	},
-	{ NVMF_OPT_NR_POLL_QUEUES,	"nr_poll_queues=%d"	},
-	{ NVMF_OPT_TOS,			"tos=%d"		},
+	{ NVMF_OPT_TRANSPORT, "transport=%s" },
+	{ NVMF_OPT_TRADDR, "traddr=%s" },
+	{ NVMF_OPT_TRSVCID, "trsvcid=%s" },
+	{ NVMF_OPT_NQN, "nqn=%s" },
+	{ NVMF_OPT_QUEUE_SIZE, "queue_size=%d" },
+	{ NVMF_OPT_NR_IO_QUEUES, "nr_io_queues=%d" },
+	{ NVMF_OPT_RECONNECT_DELAY, "reconnect_delay=%d" },
+	{ NVMF_OPT_CTRL_LOSS_TMO, "ctrl_loss_tmo=%d" },
+	{ NVMF_OPT_KATO, "keep_alive_tmo=%d" },
+	{ NVMF_OPT_HOSTNQN, "hostnqn=%s" },
+	{ NVMF_OPT_HOST_TRADDR, "host_traddr=%s" },
+	{ NVMF_OPT_HOST_IFACE, "host_iface=%s" },
+	{ NVMF_OPT_HOST_ID, "hostid=%s" },
+	{ NVMF_OPT_DUP_CONNECT, "duplicate_connect" },
+	{ NVMF_OPT_DISABLE_SQFLOW, "disable_sqflow" },
+	{ NVMF_OPT_HDR_DIGEST, "hdr_digest" },
+	{ NVMF_OPT_DATA_DIGEST, "data_digest" },
+	{ NVMF_OPT_NR_WRITE_QUEUES, "nr_write_queues=%d" },
+	{ NVMF_OPT_NR_POLL_QUEUES, "nr_poll_queues=%d" },
+	{ NVMF_OPT_TOS, "tos=%d" },
 #ifdef CONFIG_NVME_TCP_TLS
-	{ NVMF_OPT_KEYRING,		"keyring=%d"		},
-	{ NVMF_OPT_TLS_KEY,		"tls_key=%d"		},
+	{ NVMF_OPT_KEYRING, "keyring=%d" },
+	{ NVMF_OPT_TLS_KEY, "tls_key=%d" },
 #endif
-	{ NVMF_OPT_FAIL_FAST_TMO,	"fast_io_fail_tmo=%d"	},
-	{ NVMF_OPT_DISCOVERY,		"discovery"		},
+	{ NVMF_OPT_FAIL_FAST_TMO, "fast_io_fail_tmo=%d" },
+	{ NVMF_OPT_DISCOVERY, "discovery" },
 #ifdef CONFIG_NVME_HOST_AUTH
-	{ NVMF_OPT_DHCHAP_SECRET,	"dhchap_secret=%s"	},
-	{ NVMF_OPT_DHCHAP_CTRL_SECRET,	"dhchap_ctrl_secret=%s"	},
+	{ NVMF_OPT_DHCHAP_SECRET, "dhchap_secret=%s" },
+	{ NVMF_OPT_DHCHAP_CTRL_SECRET, "dhchap_ctrl_secret=%s" },
 #endif
 #ifdef CONFIG_NVME_TCP_TLS
-	{ NVMF_OPT_TLS,			"tls"			},
-	{ NVMF_OPT_CONCAT,		"concat"		},
+	{ NVMF_OPT_TLS, "tls" },
+	{ NVMF_OPT_CONCAT, "concat" },
 #endif
-	{ NVMF_OPT_ERR,			NULL			}
+	{ NVMF_OPT_ERR, NULL }
 };
 
-static int nvmf_parse_options(struct nvmf_ctrl_options *opts,
-		const char *buf)
+static int nvmf_parse_options(struct nvmf_ctrl_options *opts, const char *buf)
 {
 	substring_t args[MAX_OPT_ARGS];
 	char *options, *o, *p;
 	int token, ret = 0;
-	size_t nqnlen  = 0;
+	size_t nqnlen = 0;
 	int ctrl_loss_tmo = NVMF_DEF_CTRL_LOSS_TMO, key_id;
 	uuid_t hostid;
 	char hostnqn[NVMF_NQN_SIZE];
@@ -774,13 +765,12 @@ static int nvmf_parse_options(struct nvmf_ctrl_options *opts,
 			nqnlen = strlen(opts->subsysnqn);
 			if (nqnlen >= NVMF_NQN_SIZE) {
 				pr_err("%s needs to be < %d bytes\n",
-					opts->subsysnqn, NVMF_NQN_SIZE);
+				       opts->subsysnqn, NVMF_NQN_SIZE);
 				ret = -EINVAL;
 				goto out;
 			}
-			opts->discovery_nqn =
-				!(strcmp(opts->subsysnqn,
-					 NVME_DISC_SUBSYS_NAME));
+			opts->discovery_nqn = !(
+				strcmp(opts->subsysnqn, NVME_DISC_SUBSYS_NAME));
 			break;
 		case NVMF_OPT_TRADDR:
 			p = match_strdup(args);
@@ -824,12 +814,13 @@ static int nvmf_parse_options(struct nvmf_ctrl_options *opts,
 				goto out;
 			}
 			if (opts->discovery_nqn) {
-				pr_debug("Ignoring nr_io_queues value for discovery controller\n");
+				pr_debug(
+					"Ignoring nr_io_queues value for discovery controller\n");
 				break;
 			}
 
-			opts->nr_io_queues = min_t(unsigned int,
-					num_online_cpus(), token);
+			opts->nr_io_queues =
+				min_t(unsigned int, num_online_cpus(), token);
 			break;
 		case NVMF_OPT_KATO:
 			if (match_int(args, &token)) {
@@ -885,8 +876,8 @@ static int nvmf_parse_options(struct nvmf_ctrl_options *opts,
 			}
 			nqnlen = strlen(p);
 			if (nqnlen >= NVMF_NQN_SIZE) {
-				pr_err("%s needs to be < %d bytes\n",
-					p, NVMF_NQN_SIZE);
+				pr_err("%s needs to be < %d bytes\n", p,
+				       NVMF_NQN_SIZE);
 				kfree(p);
 				ret = -EINVAL;
 				goto out;
@@ -1084,8 +1075,8 @@ static int nvmf_parse_options(struct nvmf_ctrl_options *opts,
 	if (ctrl_loss_tmo < 0) {
 		opts->max_reconnects = -1;
 	} else {
-		opts->max_reconnects = DIV_ROUND_UP(ctrl_loss_tmo,
-						opts->reconnect_delay);
+		opts->max_reconnects =
+			DIV_ROUND_UP(ctrl_loss_tmo, opts->reconnect_delay);
 		if (ctrl_loss_tmo < opts->fast_io_fail_tmo)
 			pr_warn("failfast tmo (%d) larger than controller loss tmo (%d)\n",
 				opts->fast_io_fail_tmo, ctrl_loss_tmo);
@@ -1163,8 +1154,7 @@ void nvmf_map_queues(struct blk_mq_tag_set *set, struct nvme_ctrl *ctrl,
 		set->map[HCTX_TYPE_DEFAULT].nr_queues =
 			io_queues[HCTX_TYPE_DEFAULT];
 		set->map[HCTX_TYPE_DEFAULT].queue_offset = 0;
-		set->map[HCTX_TYPE_READ].nr_queues =
-			io_queues[HCTX_TYPE_READ];
+		set->map[HCTX_TYPE_READ].nr_queues = io_queues[HCTX_TYPE_READ];
 		set->map[HCTX_TYPE_READ].queue_offset =
 			io_queues[HCTX_TYPE_DEFAULT];
 	} else {
@@ -1188,16 +1178,14 @@ void nvmf_map_queues(struct blk_mq_tag_set *set, struct nvme_ctrl *ctrl,
 		blk_mq_map_queues(&set->map[HCTX_TYPE_POLL]);
 	}
 
-	dev_info(ctrl->device,
-		"mapped %d/%d/%d default/read/poll queues.\n",
-		io_queues[HCTX_TYPE_DEFAULT],
-		io_queues[HCTX_TYPE_READ],
-		io_queues[HCTX_TYPE_POLL]);
+	dev_info(ctrl->device, "mapped %d/%d/%d default/read/poll queues.\n",
+		 io_queues[HCTX_TYPE_DEFAULT], io_queues[HCTX_TYPE_READ],
+		 io_queues[HCTX_TYPE_POLL]);
 }
 EXPORT_SYMBOL_GPL(nvmf_map_queues);
 
 static int nvmf_check_required_opts(struct nvmf_ctrl_options *opts,
-		unsigned int required_opts)
+				    unsigned int required_opts)
 {
 	if ((opts->mask & required_opts) != required_opts) {
 		unsigned int i;
@@ -1217,7 +1205,7 @@ static int nvmf_check_required_opts(struct nvmf_ctrl_options *opts,
 }
 
 bool nvmf_ip_options_match(struct nvme_ctrl *ctrl,
-		struct nvmf_ctrl_options *opts)
+			   struct nvmf_ctrl_options *opts)
 {
 	if (!nvmf_ctlr_matches_baseopts(ctrl, opts) ||
 	    strcmp(opts->traddr, ctrl->opts->traddr) ||
@@ -1260,7 +1248,7 @@ bool nvmf_ip_options_match(struct nvme_ctrl *ctrl,
 EXPORT_SYMBOL_GPL(nvmf_ip_options_match);
 
 static int nvmf_check_allowed_opts(struct nvmf_ctrl_options *opts,
-		unsigned int allowed_opts)
+				   unsigned int allowed_opts)
 {
 	if (opts->mask & ~allowed_opts) {
 		unsigned int i;
@@ -1296,16 +1284,15 @@ void nvmf_free_options(struct nvmf_ctrl_options *opts)
 }
 EXPORT_SYMBOL_GPL(nvmf_free_options);
 
-#define NVMF_REQUIRED_OPTS	(NVMF_OPT_TRANSPORT | NVMF_OPT_NQN)
-#define NVMF_ALLOWED_OPTS	(NVMF_OPT_QUEUE_SIZE | NVMF_OPT_NR_IO_QUEUES | \
-				 NVMF_OPT_KATO | NVMF_OPT_HOSTNQN | \
-				 NVMF_OPT_HOST_ID | NVMF_OPT_DUP_CONNECT |\
-				 NVMF_OPT_DISABLE_SQFLOW | NVMF_OPT_DISCOVERY |\
-				 NVMF_OPT_FAIL_FAST_TMO | NVMF_OPT_DHCHAP_SECRET |\
-				 NVMF_OPT_DHCHAP_CTRL_SECRET)
+#define NVMF_REQUIRED_OPTS (NVMF_OPT_TRANSPORT | NVMF_OPT_NQN)
+#define NVMF_ALLOWED_OPTS                                              \
+	(NVMF_OPT_QUEUE_SIZE | NVMF_OPT_NR_IO_QUEUES | NVMF_OPT_KATO | \
+	 NVMF_OPT_HOSTNQN | NVMF_OPT_HOST_ID | NVMF_OPT_DUP_CONNECT |  \
+	 NVMF_OPT_DISABLE_SQFLOW | NVMF_OPT_DISCOVERY |                \
+	 NVMF_OPT_FAIL_FAST_TMO | NVMF_OPT_DHCHAP_SECRET |             \
+	 NVMF_OPT_DHCHAP_CTRL_SECRET)
 
-static struct nvme_ctrl *
-nvmf_create_ctrl(struct device *dev, const char *buf)
+static struct nvme_ctrl *nvmf_create_ctrl(struct device *dev, const char *buf)
 {
 	struct nvmf_ctrl_options *opts;
 	struct nvmf_transport_ops *ops;
@@ -1319,7 +1306,6 @@ nvmf_create_ctrl(struct device *dev, const char *buf)
 	ret = nvmf_parse_options(opts, buf);
 	if (ret)
 		goto out_free_opts;
-
 
 	request_module("nvme-%s", opts->transport);
 
@@ -1352,7 +1338,8 @@ nvmf_create_ctrl(struct device *dev, const char *buf)
 	if (ret)
 		goto out_module_put;
 	ret = nvmf_check_allowed_opts(opts, NVMF_ALLOWED_OPTS |
-				ops->allowed_opts | ops->required_opts);
+						    ops->allowed_opts |
+						    ops->required_opts);
 	if (ret)
 		goto out_module_put;
 
@@ -1383,7 +1370,7 @@ static struct device *nvmf_device;
 static DEFINE_MUTEX(nvmf_dev_mutex);
 
 static ssize_t nvmf_dev_write(struct file *file, const char __user *ubuf,
-		size_t count, loff_t *pos)
+			      size_t count, loff_t *pos)
 {
 	struct seq_file *seq_file = file->private_data;
 	struct nvme_ctrl *ctrl;
@@ -1448,8 +1435,8 @@ static int nvmf_dev_show(struct seq_file *seq_file, void *private)
 		goto out_unlock;
 	}
 
-	seq_printf(seq_file, "instance=%d,cntlid=%d\n",
-			ctrl->instance, ctrl->cntlid);
+	seq_printf(seq_file, "instance=%d,cntlid=%d\n", ctrl->instance,
+		   ctrl->cntlid);
 
 out_unlock:
 	mutex_unlock(&nvmf_dev_mutex);
@@ -1477,17 +1464,17 @@ static int nvmf_dev_release(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations nvmf_dev_fops = {
-	.owner		= THIS_MODULE,
-	.write		= nvmf_dev_write,
-	.read		= seq_read,
-	.open		= nvmf_dev_open,
-	.release	= nvmf_dev_release,
+	.owner = THIS_MODULE,
+	.write = nvmf_dev_write,
+	.read = seq_read,
+	.open = nvmf_dev_open,
+	.release = nvmf_dev_release,
 };
 
 static struct miscdevice nvmf_misc = {
-	.minor		= MISC_DYNAMIC_MINOR,
-	.name           = "nvme-fabrics",
-	.fops		= &nvmf_dev_fops,
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "nvme-fabrics",
+	.fops = &nvmf_dev_fops,
 };
 
 static int __init nvmf_init(void)

@@ -15,7 +15,7 @@
 static void nvmet_auth_expired_work(struct work_struct *work)
 {
 	struct nvmet_sq *sq = container_of(to_delayed_work(work),
-			struct nvmet_sq, auth_expired_work);
+					   struct nvmet_sq, auth_expired_work);
 
 	pr_debug("%s: ctrl %d qid %d transaction %u expired, resetting\n",
 		 __func__, sq->ctrl->cntlid, sq->qid, sq->dhchap_tid);
@@ -37,11 +37,12 @@ static u8 nvmet_auth_negotiate(struct nvmet_req *req, void *d)
 	struct nvmf_auth_dhchap_negotiate_data *data = d;
 	int i, hash_id = 0, fallback_hash_id = 0, dhgid, fallback_dhgid;
 
-	pr_debug("%s: ctrl %d qid %d: data sc_d %d napd %d authid %d halen %d dhlen %d\n",
-		 __func__, ctrl->cntlid, req->sq->qid,
-		 data->sc_c, data->napd, data->auth_protocol[0].dhchap.authid,
-		 data->auth_protocol[0].dhchap.halen,
-		 data->auth_protocol[0].dhchap.dhlen);
+	pr_debug(
+		"%s: ctrl %d qid %d: data sc_d %d napd %d authid %d halen %d dhlen %d\n",
+		__func__, ctrl->cntlid, req->sq->qid, data->sc_c, data->napd,
+		data->auth_protocol[0].dhchap.authid,
+		data->auth_protocol[0].dhchap.halen,
+		data->auth_protocol[0].dhchap.dhlen);
 	req->sq->dhchap_tid = le16_to_cpu(data->t_id);
 	if (data->sc_c != NVME_AUTH_SECP_NOSC) {
 		if (!IS_ENABLED(CONFIG_NVME_TARGET_TCP_TLS))
@@ -67,8 +68,7 @@ static u8 nvmet_auth_negotiate(struct nvmet_req *req, void *d)
 	if (data->napd != 1)
 		return NVME_AUTH_DHCHAP_FAILURE_HASH_UNUSABLE;
 
-	if (data->auth_protocol[0].dhchap.authid !=
-	    NVME_AUTH_DHCHAP_AUTH_ID)
+	if (data->auth_protocol[0].dhchap.authid != NVME_AUTH_DHCHAP_AUTH_ID)
 		return NVME_AUTH_DHCHAP_FAILURE_INCORRECT_PAYLOAD;
 
 	for (i = 0; i < data->auth_protocol[0].dhchap.halen; i++) {
@@ -88,9 +88,10 @@ static u8 nvmet_auth_negotiate(struct nvmet_req *req, void *d)
 				 __func__, ctrl->cntlid, req->sq->qid);
 			return NVME_AUTH_DHCHAP_FAILURE_HASH_UNUSABLE;
 		}
-		pr_debug("%s: ctrl %d qid %d: no usable hash found, falling back to %s\n",
-			 __func__, ctrl->cntlid, req->sq->qid,
-			 nvme_auth_hmac_name(fallback_hash_id));
+		pr_debug(
+			"%s: ctrl %d qid %d: no usable hash found, falling back to %s\n",
+			__func__, ctrl->cntlid, req->sq->qid,
+			nvme_auth_hmac_name(fallback_hash_id));
 		ctrl->shash_id = fallback_hash_id;
 	}
 
@@ -112,23 +113,25 @@ static u8 nvmet_auth_negotiate(struct nvmet_req *req, void *d)
 	}
 	if (dhgid < 0) {
 		if (fallback_dhgid < 0) {
-			pr_debug("%s: ctrl %d qid %d: no usable DH group found\n",
-				 __func__, ctrl->cntlid, req->sq->qid);
+			pr_debug(
+				"%s: ctrl %d qid %d: no usable DH group found\n",
+				__func__, ctrl->cntlid, req->sq->qid);
 			return NVME_AUTH_DHCHAP_FAILURE_DHGROUP_UNUSABLE;
 		}
-		pr_debug("%s: ctrl %d qid %d: configured DH group %s not found\n",
-			 __func__, ctrl->cntlid, req->sq->qid,
-			 nvme_auth_dhgroup_name(fallback_dhgid));
+		pr_debug(
+			"%s: ctrl %d qid %d: configured DH group %s not found\n",
+			__func__, ctrl->cntlid, req->sq->qid,
+			nvme_auth_dhgroup_name(fallback_dhgid));
 		ctrl->dh_gid = fallback_dhgid;
 	}
 	if (ctrl->dh_gid == NVME_AUTH_DHGROUP_NULL && ctrl->concat) {
 		pr_debug("%s: ctrl %d qid %d: NULL DH group invalid "
-			 "for secure channel concatenation\n", __func__,
-			 ctrl->cntlid, req->sq->qid);
+			 "for secure channel concatenation\n",
+			 __func__, ctrl->cntlid, req->sq->qid);
 		return NVME_AUTH_DHCHAP_FAILURE_CONCAT_MISMATCH;
 	}
-	pr_debug("%s: ctrl %d qid %d: selected DH group %s (%d)\n",
-		 __func__, ctrl->cntlid, req->sq->qid,
+	pr_debug("%s: ctrl %d qid %d: selected DH group %s (%d)\n", __func__,
+		 ctrl->cntlid, req->sq->qid,
 		 nvme_auth_dhgroup_name(ctrl->dh_gid), ctrl->dh_gid);
 	return 0;
 }
@@ -141,8 +144,8 @@ static u8 nvmet_auth_reply(struct nvmet_req *req, void *d)
 	u8 *response;
 
 	pr_debug("%s: ctrl %d qid %d: data hl %d cvalid %d dhvlen %u\n",
-		 __func__, ctrl->cntlid, req->sq->qid,
-		 data->hl, data->cvalid, dhvlen);
+		 __func__, ctrl->cntlid, req->sq->qid, data->hl, data->cvalid,
+		 dhvlen);
 
 	if (dhvlen) {
 		if (!ctrl->dh_tfm)
@@ -157,45 +160,45 @@ static u8 nvmet_auth_reply(struct nvmet_req *req, void *d)
 		return NVME_AUTH_DHCHAP_FAILURE_FAILED;
 
 	if (!ctrl->host_key) {
-		pr_warn("ctrl %d qid %d no host key\n",
-			ctrl->cntlid, req->sq->qid);
+		pr_warn("ctrl %d qid %d no host key\n", ctrl->cntlid,
+			req->sq->qid);
 		kfree(response);
 		return NVME_AUTH_DHCHAP_FAILURE_FAILED;
 	}
 	if (nvmet_auth_host_hash(req, response, data->hl) < 0) {
-		pr_debug("ctrl %d qid %d host hash failed\n",
-			 ctrl->cntlid, req->sq->qid);
+		pr_debug("ctrl %d qid %d host hash failed\n", ctrl->cntlid,
+			 req->sq->qid);
 		kfree(response);
 		return NVME_AUTH_DHCHAP_FAILURE_FAILED;
 	}
 
 	if (memcmp(data->rval, response, data->hl)) {
-		pr_info("ctrl %d qid %d host response mismatch\n",
-			ctrl->cntlid, req->sq->qid);
-		pr_debug("ctrl %d qid %d rval %*ph\n",
-			 ctrl->cntlid, req->sq->qid, data->hl, data->rval);
-		pr_debug("ctrl %d qid %d response %*ph\n",
-			 ctrl->cntlid, req->sq->qid, data->hl, response);
+		pr_info("ctrl %d qid %d host response mismatch\n", ctrl->cntlid,
+			req->sq->qid);
+		pr_debug("ctrl %d qid %d rval %*ph\n", ctrl->cntlid,
+			 req->sq->qid, data->hl, data->rval);
+		pr_debug("ctrl %d qid %d response %*ph\n", ctrl->cntlid,
+			 req->sq->qid, data->hl, response);
 		kfree(response);
 		return NVME_AUTH_DHCHAP_FAILURE_FAILED;
 	}
 	kfree(response);
-	pr_debug("%s: ctrl %d qid %d host authenticated\n",
-		 __func__, ctrl->cntlid, req->sq->qid);
+	pr_debug("%s: ctrl %d qid %d host authenticated\n", __func__,
+		 ctrl->cntlid, req->sq->qid);
 	if (!data->cvalid && ctrl->concat) {
-		pr_debug("%s: ctrl %d qid %d invalid challenge\n",
-			 __func__, ctrl->cntlid, req->sq->qid);
+		pr_debug("%s: ctrl %d qid %d invalid challenge\n", __func__,
+			 ctrl->cntlid, req->sq->qid);
 		return NVME_AUTH_DHCHAP_FAILURE_FAILED;
 	}
 	req->sq->dhchap_s2 = le32_to_cpu(data->seqnum);
 	if (data->cvalid) {
-		req->sq->dhchap_c2 = kmemdup(data->rval + data->hl, data->hl,
-					     GFP_KERNEL);
+		req->sq->dhchap_c2 =
+			kmemdup(data->rval + data->hl, data->hl, GFP_KERNEL);
 		if (!req->sq->dhchap_c2)
 			return NVME_AUTH_DHCHAP_FAILURE_FAILED;
 
-		pr_debug("%s: ctrl %d qid %d challenge %*ph\n",
-			 __func__, ctrl->cntlid, req->sq->qid, data->hl,
+		pr_debug("%s: ctrl %d qid %d challenge %*ph\n", __func__,
+			 ctrl->cntlid, req->sq->qid, data->hl,
 			 req->sq->dhchap_c2);
 	}
 	/*
@@ -241,27 +244,23 @@ void nvmet_execute_auth_send(struct nvmet_req *req)
 
 	if (req->cmd->auth_send.secp != NVME_AUTH_DHCHAP_PROTOCOL_IDENTIFIER) {
 		status = NVME_SC_INVALID_FIELD | NVME_STATUS_DNR;
-		req->error_loc =
-			offsetof(struct nvmf_auth_send_command, secp);
+		req->error_loc = offsetof(struct nvmf_auth_send_command, secp);
 		goto done;
 	}
 	if (req->cmd->auth_send.spsp0 != 0x01) {
 		status = NVME_SC_INVALID_FIELD | NVME_STATUS_DNR;
-		req->error_loc =
-			offsetof(struct nvmf_auth_send_command, spsp0);
+		req->error_loc = offsetof(struct nvmf_auth_send_command, spsp0);
 		goto done;
 	}
 	if (req->cmd->auth_send.spsp1 != 0x01) {
 		status = NVME_SC_INVALID_FIELD | NVME_STATUS_DNR;
-		req->error_loc =
-			offsetof(struct nvmf_auth_send_command, spsp1);
+		req->error_loc = offsetof(struct nvmf_auth_send_command, spsp1);
 		goto done;
 	}
 	tl = nvmet_auth_send_data_len(req);
 	if (!tl) {
 		status = NVME_SC_INVALID_FIELD | NVME_STATUS_DNR;
-		req->error_loc =
-			offsetof(struct nvmf_auth_send_command, tl);
+		req->error_loc = offsetof(struct nvmf_auth_send_command, tl);
 		goto done;
 	}
 	if (!nvmet_check_transfer_len(req, tl)) {
@@ -320,17 +319,16 @@ void nvmet_execute_auth_send(struct nvmet_req *req)
 	}
 	if (data->auth_id != req->sq->dhchap_step) {
 		pr_debug("%s: ctrl %d qid %d step mismatch (%d != %d)\n",
-			 __func__, ctrl->cntlid, req->sq->qid,
-			 data->auth_id, req->sq->dhchap_step);
+			 __func__, ctrl->cntlid, req->sq->qid, data->auth_id,
+			 req->sq->dhchap_step);
 		goto done_failure1;
 	}
 	if (le16_to_cpu(data->t_id) != req->sq->dhchap_tid) {
-		pr_debug("%s: ctrl %d qid %d invalid transaction %d (expected %d)\n",
-			 __func__, ctrl->cntlid, req->sq->qid,
-			 le16_to_cpu(data->t_id),
-			 req->sq->dhchap_tid);
-		req->sq->dhchap_step =
-			NVME_AUTH_DHCHAP_MESSAGE_FAILURE1;
+		pr_debug(
+			"%s: ctrl %d qid %d invalid transaction %d (expected %d)\n",
+			__func__, ctrl->cntlid, req->sq->qid,
+			le16_to_cpu(data->t_id), req->sq->dhchap_tid);
+		req->sq->dhchap_step = NVME_AUTH_DHCHAP_MESSAGE_FAILURE1;
 		req->sq->dhchap_status =
 			NVME_AUTH_DHCHAP_FAILURE_INCORRECT_PAYLOAD;
 		goto done_kfree;
@@ -352,8 +350,8 @@ void nvmet_execute_auth_send(struct nvmet_req *req)
 		if (ctrl->concat)
 			nvmet_auth_insert_psk(req->sq);
 		req->sq->authenticated = true;
-		pr_debug("%s: ctrl %d qid %d ctrl authenticated\n",
-			 __func__, ctrl->cntlid, req->sq->qid);
+		pr_debug("%s: ctrl %d qid %d ctrl authenticated\n", __func__,
+			 ctrl->cntlid, req->sq->qid);
 		goto done_kfree;
 	case NVME_AUTH_DHCHAP_MESSAGE_FAILURE2:
 		dhchap_status = nvmet_auth_failure2(d);
@@ -367,8 +365,7 @@ void nvmet_execute_auth_send(struct nvmet_req *req)
 	default:
 		req->sq->dhchap_status =
 			NVME_AUTH_DHCHAP_FAILURE_INCORRECT_MESSAGE;
-		req->sq->dhchap_step =
-			NVME_AUTH_DHCHAP_MESSAGE_FAILURE2;
+		req->sq->dhchap_step = NVME_AUTH_DHCHAP_MESSAGE_FAILURE2;
 		req->sq->authenticated = false;
 		goto done_kfree;
 	}
@@ -380,12 +377,12 @@ done_kfree:
 	kfree(d);
 done:
 	pr_debug("%s: ctrl %d qid %d dhchap status %x step %x\n", __func__,
-		 ctrl->cntlid, req->sq->qid,
-		 req->sq->dhchap_status, req->sq->dhchap_step);
+		 ctrl->cntlid, req->sq->qid, req->sq->dhchap_status,
+		 req->sq->dhchap_step);
 	if (status)
 		pr_debug("%s: ctrl %d qid %d nvme status %x error loc %d\n",
-			 __func__, ctrl->cntlid, req->sq->qid,
-			 status, req->error_loc);
+			 __func__, ctrl->cntlid, req->sq->qid, status,
+			 req->error_loc);
 	if (req->sq->dhchap_step != NVME_AUTH_DHCHAP_MESSAGE_SUCCESS2 &&
 	    req->sq->dhchap_step != NVME_AUTH_DHCHAP_MESSAGE_FAILURE2) {
 		unsigned long auth_expire_secs = ctrl->kato ? ctrl->kato : 120;
@@ -414,8 +411,8 @@ static int nvmet_auth_challenge(struct nvmet_req *req, void *d, int al)
 	if (ctrl->dh_tfm)
 		data_size += ctrl->dh_keysize;
 	if (al < data_size) {
-		pr_debug("%s: buffer too small (al %d need %d)\n", __func__,
-			 al, data_size);
+		pr_debug("%s: buffer too small (al %d need %d)\n", __func__, al,
+			 data_size);
 		return -EINVAL;
 	}
 	memset(data, 0, data_size);
@@ -457,15 +454,15 @@ static int nvmet_auth_success1(struct nvmet_req *req, void *d, int al)
 	data->hl = hash_len;
 	if (req->sq->dhchap_c2) {
 		if (!ctrl->ctrl_key) {
-			pr_warn("ctrl %d qid %d no ctrl key\n",
-				ctrl->cntlid, req->sq->qid);
+			pr_warn("ctrl %d qid %d no ctrl key\n", ctrl->cntlid,
+				req->sq->qid);
 			return NVME_AUTH_DHCHAP_FAILURE_FAILED;
 		}
 		if (nvmet_auth_ctrl_hash(req, data->rval, data->hl))
 			return NVME_AUTH_DHCHAP_FAILURE_HASH_UNUSABLE;
 		data->rvalid = 1;
-		pr_debug("ctrl %d qid %d response %*ph\n",
-			 ctrl->cntlid, req->sq->qid, data->hl, data->rval);
+		pr_debug("ctrl %d qid %d response %*ph\n", ctrl->cntlid,
+			 req->sq->qid, data->hl, data->rval);
 	}
 	return 0;
 }
@@ -494,7 +491,8 @@ void nvmet_execute_auth_receive(struct nvmet_req *req)
 	u32 al;
 	u16 status = 0;
 
-	if (req->cmd->auth_receive.secp != NVME_AUTH_DHCHAP_PROTOCOL_IDENTIFIER) {
+	if (req->cmd->auth_receive.secp !=
+	    NVME_AUTH_DHCHAP_PROTOCOL_IDENTIFIER) {
 		status = NVME_SC_INVALID_FIELD | NVME_STATUS_DNR;
 		req->error_loc =
 			offsetof(struct nvmf_auth_receive_command, secp);
@@ -515,8 +513,7 @@ void nvmet_execute_auth_receive(struct nvmet_req *req)
 	al = nvmet_auth_receive_data_len(req);
 	if (!al) {
 		status = NVME_SC_INVALID_FIELD | NVME_STATUS_DNR;
-		req->error_loc =
-			offsetof(struct nvmf_auth_receive_command, al);
+		req->error_loc = offsetof(struct nvmf_auth_receive_command, al);
 		goto done;
 	}
 	if (!nvmet_check_transfer_len(req, al)) {
@@ -529,8 +526,8 @@ void nvmet_execute_auth_receive(struct nvmet_req *req)
 		status = NVME_SC_INTERNAL;
 		goto done;
 	}
-	pr_debug("%s: ctrl %d qid %d step %x\n", __func__,
-		 ctrl->cntlid, req->sq->qid, req->sq->dhchap_step);
+	pr_debug("%s: ctrl %d qid %d step %x\n", __func__, ctrl->cntlid,
+		 req->sq->qid, req->sq->dhchap_step);
 	switch (req->sq->dhchap_step) {
 	case NVME_AUTH_DHCHAP_MESSAGE_CHALLENGE:
 		if (nvmet_auth_challenge(req, d, al) < 0) {
@@ -557,12 +554,12 @@ void nvmet_execute_auth_receive(struct nvmet_req *req)
 	case NVME_AUTH_DHCHAP_MESSAGE_FAILURE1:
 		req->sq->authenticated = false;
 		nvmet_auth_failure1(req, d, al);
-		pr_warn("ctrl %d qid %d failure1 (%x)\n",
-			ctrl->cntlid, req->sq->qid, req->sq->dhchap_status);
+		pr_warn("ctrl %d qid %d failure1 (%x)\n", ctrl->cntlid,
+			req->sq->qid, req->sq->dhchap_status);
 		break;
 	default:
-		pr_warn("ctrl %d qid %d unhandled step (%d)\n",
-			ctrl->cntlid, req->sq->qid, req->sq->dhchap_step);
+		pr_warn("ctrl %d qid %d unhandled step (%d)\n", ctrl->cntlid,
+			req->sq->qid, req->sq->dhchap_step);
 		req->sq->dhchap_step = NVME_AUTH_DHCHAP_MESSAGE_FAILURE1;
 		req->sq->dhchap_status = NVME_AUTH_DHCHAP_FAILURE_FAILED;
 		nvmet_auth_failure1(req, d, al);

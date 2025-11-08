@@ -91,13 +91,13 @@ int nvmet_bdev_ns_enable(struct nvmet_ns *ns)
 	if (ns->buffered_io)
 		return -ENOTBLK;
 
-	ns->bdev_file = bdev_file_open_by_path(ns->device_path,
-				BLK_OPEN_READ | BLK_OPEN_WRITE, NULL, NULL);
+	ns->bdev_file = bdev_file_open_by_path(
+		ns->device_path, BLK_OPEN_READ | BLK_OPEN_WRITE, NULL, NULL);
 	if (IS_ERR(ns->bdev_file)) {
 		ret = PTR_ERR(ns->bdev_file);
 		if (ret != -ENOTBLK) {
 			pr_err("failed to open block device %s: (%d)\n",
-					ns->device_path, ret);
+			       ns->device_path, ret);
 		}
 		ns->bdev_file = NULL;
 		return ret;
@@ -168,8 +168,7 @@ u16 blk_to_nvme_status(struct nvmet_req *req, blk_status_t blk_sts)
 		req->error_slba = le64_to_cpu(req->cmd->rw.slba);
 		break;
 	case nvme_cmd_write_zeroes:
-		req->error_slba =
-			le64_to_cpu(req->cmd->write_zeroes.slba);
+		req->error_slba = le64_to_cpu(req->cmd->write_zeroes.slba);
 		break;
 	default:
 		req->error_slba = 0;
@@ -201,7 +200,7 @@ static int nvmet_bdev_alloc_bip(struct nvmet_req *req, struct bio *bio,
 	}
 
 	bip = bio_integrity_alloc(bio, GFP_NOIO,
-					bio_max_segs(req->metadata_sg_cnt));
+				  bio_max_segs(req->metadata_sg_cnt));
 	if (IS_ERR(bip)) {
 		pr_err("Unable to allocate bio_integrity_payload\n");
 		return PTR_ERR(bip);
@@ -209,7 +208,7 @@ static int nvmet_bdev_alloc_bip(struct nvmet_req *req, struct bio *bio,
 
 	/* virtual start sector must be in integrity interval units */
 	bip_set_seed(bip, bio->bi_iter.bi_sector >>
-		     (bi->interval_exp - SECTOR_SHIFT));
+				  (bi->interval_exp - SECTOR_SHIFT));
 
 	resid = bio_integrity_bytes(bi, bio_sectors(bio));
 	while (resid > 0 && sg_miter_next(miter)) {
@@ -295,8 +294,8 @@ static void nvmet_bdev_execute_rw(struct nvmet_req *req)
 			       req->metadata_sg_cnt, iter_flags);
 
 	for_each_sg(req->sg, sg, req->sg_cnt, i) {
-		while (bio_add_page(bio, sg_page(sg), sg->length, sg->offset)
-				!= sg->length) {
+		while (bio_add_page(bio, sg_page(sg), sg->length, sg->offset) !=
+		       sg->length) {
 			struct bio *prev = bio;
 
 			if (req->metadata_len) {
@@ -363,15 +362,16 @@ u16 nvmet_bdev_flush(struct nvmet_req *req)
 }
 
 static u16 nvmet_bdev_discard_range(struct nvmet_req *req,
-		struct nvme_dsm_range *range, struct bio **bio)
+				    struct nvme_dsm_range *range,
+				    struct bio **bio)
 {
 	struct nvmet_ns *ns = req->ns;
 	int ret;
 
-	ret = __blkdev_issue_discard(ns->bdev,
-			nvmet_lba_to_sect(ns, range->slba),
-			le32_to_cpu(range->nlb) << (ns->blksize_shift - 9),
-			GFP_KERNEL, bio);
+	ret = __blkdev_issue_discard(
+		ns->bdev, nvmet_lba_to_sect(ns, range->slba),
+		le32_to_cpu(range->nlb) << (ns->blksize_shift - 9), GFP_KERNEL,
+		bio);
 	if (ret && ret != -EOPNOTSUPP) {
 		req->error_slba = le64_to_cpu(range->slba);
 		return errno_to_nvme_status(req, ret);
@@ -388,7 +388,7 @@ static void nvmet_bdev_execute_discard(struct nvmet_req *req)
 
 	for (i = 0; i <= le32_to_cpu(req->cmd->dsm.nr); i++) {
 		status = nvmet_copy_from_sgl(req, i * sizeof(range), &range,
-				sizeof(range));
+					     sizeof(range));
 		if (status)
 			break;
 
@@ -439,11 +439,11 @@ static void nvmet_bdev_execute_write_zeroes(struct nvmet_req *req)
 		return;
 
 	sector = nvmet_lba_to_sect(req->ns, write_zeroes->slba);
-	nr_sector = (((sector_t)le16_to_cpu(write_zeroes->length) + 1) <<
-		(req->ns->blksize_shift - 9));
+	nr_sector = (((sector_t)le16_to_cpu(write_zeroes->length) + 1)
+		     << (req->ns->blksize_shift - 9));
 
 	ret = __blkdev_issue_zeroout(req->ns->bdev, sector, nr_sector,
-			GFP_KERNEL, &bio, 0);
+				     GFP_KERNEL, &bio, 0);
 	if (bio) {
 		bio->bi_private = req;
 		bio->bi_end_io = nvmet_bio_done;

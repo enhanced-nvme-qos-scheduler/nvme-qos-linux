@@ -6,7 +6,7 @@
 
 #include "nvme.h"
 
-static const char * const nvme_ops[] = {
+static const char *const nvme_ops[] = {
 	[nvme_cmd_flush] = "Flush",
 	[nvme_cmd_write] = "Write",
 	[nvme_cmd_read] = "Read",
@@ -24,7 +24,7 @@ static const char * const nvme_ops[] = {
 	[nvme_cmd_zone_append] = "Zone Append",
 };
 
-static const char * const nvme_admin_ops[] = {
+static const char *const nvme_admin_ops[] = {
 	[nvme_admin_delete_sq] = "Delete SQ",
 	[nvme_admin_create_sq] = "Create SQ",
 	[nvme_admin_get_log_page] = "Get Log Page",
@@ -54,7 +54,7 @@ static const char * const nvme_admin_ops[] = {
 	[nvme_admin_get_lba_status] = "Get LBA Status",
 };
 
-static const char * const nvme_fabrics_ops[] = {
+static const char *const nvme_fabrics_ops[] = {
 	[nvme_fabrics_type_property_set] = "Property Set",
 	[nvme_fabrics_type_property_get] = "Property Get",
 	[nvme_fabrics_type_connect] = "Connect",
@@ -62,18 +62,20 @@ static const char * const nvme_fabrics_ops[] = {
 	[nvme_fabrics_type_auth_receive] = "Authentication Receive",
 };
 
-static const char * const nvme_statuses[] = {
+static const char *const nvme_statuses[] = {
 	[NVME_SC_SUCCESS] = "Success",
 	[NVME_SC_INVALID_OPCODE] = "Invalid Command Opcode",
 	[NVME_SC_INVALID_FIELD] = "Invalid Field in Command",
 	[NVME_SC_CMDID_CONFLICT] = "Command ID Conflict",
 	[NVME_SC_DATA_XFER_ERROR] = "Data Transfer Error",
-	[NVME_SC_POWER_LOSS] = "Commands Aborted due to Power Loss Notification",
+	[NVME_SC_POWER_LOSS] =
+		"Commands Aborted due to Power Loss Notification",
 	[NVME_SC_INTERNAL] = "Internal Error",
 	[NVME_SC_ABORT_REQ] = "Command Abort Requested",
 	[NVME_SC_ABORT_QUEUE] = "Command Aborted due to SQ Deletion",
 	[NVME_SC_FUSED_FAIL] = "Command Aborted due to Failed Fused Command",
-	[NVME_SC_FUSED_MISSING] = "Command Aborted due to Missing Fused Command",
+	[NVME_SC_FUSED_MISSING] =
+		"Command Aborted due to Missing Fused Command",
 	[NVME_SC_INVALID_NS] = "Invalid Namespace or Format",
 	[NVME_SC_CMD_SEQ_ERROR] = "Command Sequence Error",
 	[NVME_SC_SGL_INVALID_LAST] = "Invalid SGL Segment Descriptor",
@@ -90,15 +92,19 @@ static const char * const nvme_statuses[] = {
 	[NVME_SC_HOST_ID_INCONSIST] = "Host Identifier Inconsistent Format",
 	[NVME_SC_KA_TIMEOUT_EXPIRED] = "Keep Alive Timeout Expired",
 	[NVME_SC_KA_TIMEOUT_INVALID] = "Keep Alive Timeout Invalid",
-	[NVME_SC_ABORTED_PREEMPT_ABORT] = "Command Aborted due to Preempt and Abort",
+	[NVME_SC_ABORTED_PREEMPT_ABORT] =
+		"Command Aborted due to Preempt and Abort",
 	[NVME_SC_SANITIZE_FAILED] = "Sanitize Failed",
 	[NVME_SC_SANITIZE_IN_PROGRESS] = "Sanitize In Progress",
-	[NVME_SC_SGL_INVALID_GRANULARITY] = "SGL Data Block Granularity Invalid",
-	[NVME_SC_CMD_NOT_SUP_CMB_QUEUE] = "Command Not Supported for Queue in CMB",
+	[NVME_SC_SGL_INVALID_GRANULARITY] =
+		"SGL Data Block Granularity Invalid",
+	[NVME_SC_CMD_NOT_SUP_CMB_QUEUE] =
+		"Command Not Supported for Queue in CMB",
 	[NVME_SC_NS_WRITE_PROTECTED] = "Namespace is Write Protected",
 	[NVME_SC_CMD_INTERRUPTED] = "Command Interrupted",
 	[NVME_SC_TRANSIENT_TR_ERR] = "Transient Transport Error",
-	[NVME_SC_ADMIN_COMMAND_MEDIA_NOT_READY] = "Admin Command Media Not Ready",
+	[NVME_SC_ADMIN_COMMAND_MEDIA_NOT_READY] =
+		"Admin Command Media Not Ready",
 	[NVME_SC_INVALID_IO_CMD_SET] = "Invalid IO Command Set",
 	[NVME_SC_LBA_RANGE] = "LBA Out of Range",
 	[NVME_SC_CAP_EXCEEDED] = "Capacity Exceeded",
@@ -116,14 +122,17 @@ static const char * const nvme_statuses[] = {
 	[NVME_SC_INVALID_VECTOR] = "Invalid Interrupt Vector",
 	[NVME_SC_INVALID_LOG_PAGE] = "Invalid Log Page",
 	[NVME_SC_INVALID_FORMAT] = "Invalid Format",
-	[NVME_SC_FW_NEEDS_CONV_RESET] = "Firmware Activation Requires Conventional Reset",
+	[NVME_SC_FW_NEEDS_CONV_RESET] =
+		"Firmware Activation Requires Conventional Reset",
 	[NVME_SC_INVALID_QUEUE] = "Invalid Queue Deletion",
 	[NVME_SC_FEATURE_NOT_SAVEABLE] = "Feature Identifier Not Saveable",
 	[NVME_SC_FEATURE_NOT_CHANGEABLE] = "Feature Not Changeable",
 	[NVME_SC_FEATURE_NOT_PER_NS] = "Feature Not Namespace Specific",
-	[NVME_SC_FW_NEEDS_SUBSYS_RESET] = "Firmware Activation Requires NVM Subsystem Reset",
+	[NVME_SC_FW_NEEDS_SUBSYS_RESET] =
+		"Firmware Activation Requires NVM Subsystem Reset",
 	[NVME_SC_FW_NEEDS_RESET] = "Firmware Activation Requires Reset",
-	[NVME_SC_FW_NEEDS_MAX_TIME] = "Firmware Activation Requires Maximum Time Violation",
+	[NVME_SC_FW_NEEDS_MAX_TIME] =
+		"Firmware Activation Requires Maximum Time Violation",
 	[NVME_SC_FW_ACTIVATE_PROHIBITED] = "Firmware Activation Prohibited",
 	[NVME_SC_OVERLAPPING_RANGE] = "Overlapping Range",
 	[NVME_SC_NS_INSUFFICIENT_CAP] = "Namespace Insufficient Capacity",
@@ -137,7 +146,8 @@ static const char * const nvme_statuses[] = {
 	[NVME_SC_BP_WRITE_PROHIBITED] = "Boot Partition Write Prohibited",
 	[NVME_SC_CTRL_ID_INVALID] = "Invalid Controller Identifier",
 	[NVME_SC_SEC_CTRL_STATE_INVALID] = "Invalid Secondary Controller State",
-	[NVME_SC_CTRL_RES_NUM_INVALID] = "Invalid Number of Controller Resources",
+	[NVME_SC_CTRL_RES_NUM_INVALID] =
+		"Invalid Number of Controller Resources",
 	[NVME_SC_RES_ID_INVALID] = "Invalid Resource Identifier",
 	[NVME_SC_PMR_SAN_PROHIBITED] = "Sanitize Prohibited",
 	[NVME_SC_ANA_GROUP_ID_INVALID] = "ANA Group Identifier Invalid",
@@ -195,7 +205,8 @@ const char *nvme_get_admin_opcode_str(u8 opcode)
 }
 EXPORT_SYMBOL_GPL(nvme_get_admin_opcode_str);
 
-const char *nvme_get_fabrics_opcode_str(u8 opcode) {
+const char *nvme_get_fabrics_opcode_str(u8 opcode)
+{
 	if (opcode < ARRAY_SIZE(nvme_fabrics_ops) && nvme_fabrics_ops[opcode])
 		return nvme_fabrics_ops[opcode];
 	return "Unknown";

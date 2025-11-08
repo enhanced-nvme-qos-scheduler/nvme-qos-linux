@@ -153,8 +153,9 @@ static u16 nvmet_passthru_override_id_ctrl(struct nvmet_req *req)
 	memcpy(id->subnqn, ctrl->subsysnqn, sizeof(id->subnqn));
 
 	/* use fabric id-ctrl values */
-	id->ioccsz = cpu_to_le32((sizeof(struct nvme_command) +
-				req->port->inline_data_size) / 16);
+	id->ioccsz = cpu_to_le32(
+		(sizeof(struct nvme_command) + req->port->inline_data_size) /
+		16);
 	id->iorcsz = cpu_to_le32(sizeof(struct nvme_completion) / 16);
 
 	id->msdbd = ctrl->ops->msdbd;
@@ -279,7 +280,7 @@ static int nvmet_passthru_map_sg(struct nvmet_req *req, struct request *rq)
 
 	for_each_sg(req->sg, sg, req->sg_cnt, i) {
 		if (bio_add_page(bio, sg_page(sg), sg->length, sg->offset) <
-				sg->length)
+		    sg->length)
 			goto out_bio_put;
 	}
 
@@ -385,8 +386,8 @@ static void nvmet_passthru_set_host_behaviour(struct nvmet_req *req)
 	if (!host)
 		goto out_complete_req;
 
-	ret = nvme_get_features(ctrl, NVME_FEAT_HOST_BEHAVIOR, 0,
-				host, sizeof(*host), NULL);
+	ret = nvme_get_features(ctrl, NVME_FEAT_HOST_BEHAVIOR, 0, host,
+				sizeof(*host), NULL);
 	if (ret)
 		goto out_free_host;
 
@@ -606,8 +607,8 @@ int nvmet_passthru_ctrl_enable(struct nvmet_subsys *subsys)
 		goto out_put_file;
 	}
 
-	old = xa_cmpxchg(&passthru_subsystems, ctrl->instance, NULL,
-			 subsys, GFP_KERNEL);
+	old = xa_cmpxchg(&passthru_subsystems, ctrl->instance, NULL, subsys,
+			 GFP_KERNEL);
 	if (xa_is_err(old)) {
 		ret = xa_err(old);
 		goto out_put_file;

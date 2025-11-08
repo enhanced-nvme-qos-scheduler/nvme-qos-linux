@@ -36,11 +36,12 @@ static const struct kernel_param_ops multipath_param_ops = {
 };
 
 module_param_cb(multipath, &multipath_param_ops, &multipath, 0444);
-MODULE_PARM_DESC(multipath,
+MODULE_PARM_DESC(
+	multipath,
 	"turn on native support for multiple controllers per subsystem");
 
 static int multipath_always_on_set(const char *val,
-		const struct kernel_param *kp)
+				   const struct kernel_param *kp)
 {
 	int ret;
 	bool *arg = kp->arg;
@@ -62,13 +63,14 @@ static const struct kernel_param_ops multipath_always_on_ops = {
 
 module_param_cb(multipath_always_on, &multipath_always_on_ops,
 		&multipath_always_on, 0444);
-MODULE_PARM_DESC(multipath_always_on,
+MODULE_PARM_DESC(
+	multipath_always_on,
 	"create multipath node always except for private namespace with non-unique nsid; note that this also implicitly enables native multipath support");
 
 static const char *nvme_iopolicy_names[] = {
-	[NVME_IOPOLICY_NUMA]	= "numa",
-	[NVME_IOPOLICY_RR]	= "round-robin",
-	[NVME_IOPOLICY_QD]      = "queue-depth",
+	[NVME_IOPOLICY_NUMA] = "numa",
+	[NVME_IOPOLICY_RR] = "round-robin",
+	[NVME_IOPOLICY_QD] = "queue-depth",
 };
 
 static int iopolicy = NVME_IOPOLICY_NUMA;
@@ -94,9 +96,10 @@ static int nvme_get_iopolicy(char *buf, const struct kernel_param *kp)
 	return sprintf(buf, "%s\n", nvme_iopolicy_names[iopolicy]);
 }
 
-module_param_call(iopolicy, nvme_set_iopolicy, nvme_get_iopolicy,
-	&iopolicy, 0644);
-MODULE_PARM_DESC(iopolicy,
+module_param_call(iopolicy, nvme_set_iopolicy, nvme_get_iopolicy, &iopolicy,
+		  0644);
+MODULE_PARM_DESC(
+	iopolicy,
 	"Default multipath I/O policy; 'numa' (default), 'round-robin' or 'queue-depth'");
 
 void nvme_mpath_default_iopolicy(struct nvme_subsystem *subsys)
@@ -193,8 +196,8 @@ void nvme_mpath_start_request(struct request *rq)
 		return;
 
 	nvme_req(rq)->flags |= NVME_MPATH_IO_STATS;
-	nvme_req(rq)->start_time = bdev_start_io_acct(disk->part0, req_op(rq),
-						      jiffies);
+	nvme_req(rq)->start_time =
+		bdev_start_io_acct(disk->part0, req_op(rq), jiffies);
 }
 EXPORT_SYMBOL_GPL(nvme_mpath_start_request);
 
@@ -230,12 +233,12 @@ void nvme_kick_requeue_lists(struct nvme_ctrl *ctrl)
 }
 
 static const char *nvme_ana_state_names[] = {
-	[0]				= "invalid state",
-	[NVME_ANA_OPTIMIZED]		= "optimized",
-	[NVME_ANA_NONOPTIMIZED]		= "non-optimized",
-	[NVME_ANA_INACCESSIBLE]		= "inaccessible",
-	[NVME_ANA_PERSISTENT_LOSS]	= "persistent-loss",
-	[NVME_ANA_CHANGE]		= "change",
+	[0] = "invalid state",
+	[NVME_ANA_OPTIMIZED] = "optimized",
+	[NVME_ANA_NONOPTIMIZED] = "non-optimized",
+	[NVME_ANA_INACCESSIBLE] = "inaccessible",
+	[NVME_ANA_PERSISTENT_LOSS] = "persistent-loss",
+	[NVME_ANA_CHANGE] = "change",
 };
 
 bool nvme_mpath_clear_current_path(struct nvme_ns *ns)
@@ -350,10 +353,10 @@ static struct nvme_ns *__nvme_find_path(struct nvme_ns_head *head, int node)
 }
 
 static struct nvme_ns *nvme_next_ns(struct nvme_ns_head *head,
-		struct nvme_ns *ns)
+				    struct nvme_ns *ns)
 {
 	ns = list_next_or_null_rcu(&head->list, &ns->siblings, struct nvme_ns,
-			siblings);
+				   siblings);
 	if (ns)
 		return ns;
 	return list_first_or_null_rcu(&head->list, struct nvme_ns, siblings);
@@ -363,8 +366,8 @@ static struct nvme_ns *nvme_round_robin_path(struct nvme_ns_head *head)
 {
 	struct nvme_ns *ns, *found = NULL;
 	int node = numa_node_id();
-	struct nvme_ns *old = srcu_dereference(head->current_path[node],
-					       &head->srcu);
+	struct nvme_ns *old =
+		srcu_dereference(head->current_path[node], &head->srcu);
 
 	if (unlikely(!old))
 		return __nvme_find_path(head, node);
@@ -375,8 +378,7 @@ static struct nvme_ns *nvme_round_robin_path(struct nvme_ns_head *head)
 		return old;
 	}
 
-	for (ns = nvme_next_ns(head, old);
-	     ns && ns != old;
+	for (ns = nvme_next_ns(head, old); ns && ns != old;
 	     ns = nvme_next_ns(head, ns)) {
 		if (nvme_path_is_disabled(ns))
 			continue;
@@ -447,7 +449,7 @@ static struct nvme_ns *nvme_queue_depth_path(struct nvme_ns_head *head)
 static inline bool nvme_path_is_optimized(struct nvme_ns *ns)
 {
 	return nvme_ctrl_state(ns->ctrl) == NVME_CTRL_LIVE &&
-		ns->ana_state == NVME_ANA_OPTIMIZED;
+	       ns->ana_state == NVME_ANA_OPTIMIZED;
 }
 
 static struct nvme_ns *nvme_numa_path(struct nvme_ns_head *head)
@@ -560,7 +562,7 @@ static void nvme_ns_head_release(struct gendisk *disk)
 }
 
 static int nvme_ns_head_get_unique_id(struct gendisk *disk, u8 id[16],
-		enum blk_unique_id type)
+				      enum blk_unique_id type)
 {
 	struct nvme_ns_head *head = disk->private_data;
 	struct nvme_ns *ns;
@@ -576,7 +578,8 @@ static int nvme_ns_head_get_unique_id(struct gendisk *disk, u8 id[16],
 
 #ifdef CONFIG_BLK_DEV_ZONED
 static int nvme_ns_head_report_zones(struct gendisk *disk, sector_t sector,
-		unsigned int nr_zones, report_zones_cb cb, void *data)
+				     unsigned int nr_zones, report_zones_cb cb,
+				     void *data)
 {
 	struct nvme_ns_head *head = disk->private_data;
 	struct nvme_ns *ns;
@@ -590,20 +593,20 @@ static int nvme_ns_head_report_zones(struct gendisk *disk, sector_t sector,
 	return ret;
 }
 #else
-#define nvme_ns_head_report_zones	NULL
+#define nvme_ns_head_report_zones NULL
 #endif /* CONFIG_BLK_DEV_ZONED */
 
 const struct block_device_operations nvme_ns_head_ops = {
-	.owner		= THIS_MODULE,
-	.submit_bio	= nvme_ns_head_submit_bio,
-	.open		= nvme_ns_head_open,
-	.release	= nvme_ns_head_release,
-	.ioctl		= nvme_ns_head_ioctl,
-	.compat_ioctl	= blkdev_compat_ptr_ioctl,
-	.getgeo		= nvme_getgeo,
-	.get_unique_id	= nvme_ns_head_get_unique_id,
-	.report_zones	= nvme_ns_head_report_zones,
-	.pr_ops		= &nvme_pr_ops,
+	.owner = THIS_MODULE,
+	.submit_bio = nvme_ns_head_submit_bio,
+	.open = nvme_ns_head_open,
+	.release = nvme_ns_head_release,
+	.ioctl = nvme_ns_head_ioctl,
+	.compat_ioctl = blkdev_compat_ptr_ioctl,
+	.getgeo = nvme_getgeo,
+	.get_unique_id = nvme_ns_head_get_unique_id,
+	.report_zones = nvme_ns_head_report_zones,
+	.pr_ops = &nvme_pr_ops,
 };
 
 static inline struct nvme_ns_head *cdev_to_ns_head(struct cdev *cdev)
@@ -625,12 +628,12 @@ static int nvme_ns_head_chr_release(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations nvme_ns_head_chr_fops = {
-	.owner		= THIS_MODULE,
-	.open		= nvme_ns_head_chr_open,
-	.release	= nvme_ns_head_chr_release,
-	.unlocked_ioctl	= nvme_ns_head_chr_ioctl,
-	.compat_ioctl	= compat_ptr_ioctl,
-	.uring_cmd	= nvme_ns_head_chr_uring_cmd,
+	.owner = THIS_MODULE,
+	.open = nvme_ns_head_chr_open,
+	.release = nvme_ns_head_chr_release,
+	.unlocked_ioctl = nvme_ns_head_chr_ioctl,
+	.compat_ioctl = compat_ptr_ioctl,
+	.uring_cmd = nvme_ns_head_chr_uring_cmd,
 	.uring_cmd_iopoll = nvme_ns_chr_uring_cmd_iopoll,
 };
 
@@ -698,8 +701,8 @@ static void nvme_remove_head(struct nvme_ns_head *head)
 
 static void nvme_remove_head_work(struct work_struct *work)
 {
-	struct nvme_ns_head *head = container_of(to_delayed_work(work),
-			struct nvme_ns_head, remove_work);
+	struct nvme_ns_head *head = container_of(
+		to_delayed_work(work), struct nvme_ns_head, remove_work);
 	bool remove = false;
 
 	mutex_lock(&head->subsys->lock);
@@ -737,7 +740,7 @@ int nvme_mpath_alloc_disk(struct nvme_ctrl *ctrl, struct nvme_ns_head *head)
 	 */
 	if (!multipath_always_on) {
 		if (!(ctrl->subsys->cmic & NVME_CTRL_CMIC_MULTI_CTRL) ||
-				!multipath)
+		    !multipath)
 			return 0;
 	}
 
@@ -746,8 +749,8 @@ int nvme_mpath_alloc_disk(struct nvme_ctrl *ctrl, struct nvme_ns_head *head)
 
 	blk_set_stacking_limits(&lim);
 	lim.dma_alignment = 3;
-	lim.features |= BLK_FEAT_IO_STAT | BLK_FEAT_NOWAIT |
-		BLK_FEAT_POLL | BLK_FEAT_ATOMIC_WRITES;
+	lim.features |= BLK_FEAT_IO_STAT | BLK_FEAT_NOWAIT | BLK_FEAT_POLL |
+			BLK_FEAT_ATOMIC_WRITES;
 	if (head->ids.csi == NVME_CSI_ZNS)
 		lim.features |= BLK_FEAT_ZONED;
 
@@ -766,8 +769,8 @@ int nvme_mpath_alloc_disk(struct nvme_ctrl *ctrl, struct nvme_ns_head *head)
 	 * scan_work.
 	 */
 	set_bit(GD_SUPPRESS_PART_SCAN, &head->disk->state);
-	sprintf(head->disk->disk_name, "nvme%dn%d",
-			ctrl->subsys->instance, head->instance);
+	sprintf(head->disk->disk_name, "nvme%dn%d", ctrl->subsys->instance,
+		head->instance);
 	nvme_tryget_ns_head(head);
 	return 0;
 }
@@ -814,8 +817,8 @@ static void nvme_mpath_set_live(struct nvme_ns *ns)
 }
 
 static int nvme_parse_ana_log(struct nvme_ctrl *ctrl, void *data,
-		int (*cb)(struct nvme_ctrl *ctrl, struct nvme_ana_group_desc *,
-			void *))
+			      int (*cb)(struct nvme_ctrl *ctrl,
+					struct nvme_ana_group_desc *, void *))
 {
 	void *base = ctrl->ana_log_buf;
 	size_t offset = sizeof(struct nvme_ana_rsp_hdr);
@@ -863,7 +866,7 @@ static inline bool nvme_state_is_live(enum nvme_ana_state state)
 }
 
 static void nvme_update_ns_ana_state(struct nvme_ana_group_desc *desc,
-		struct nvme_ns *ns)
+				     struct nvme_ns *ns)
 {
 	ns->ana_grpid = le32_to_cpu(desc->grpid);
 	ns->ana_state = desc->state;
@@ -902,16 +905,15 @@ static void nvme_update_ns_ana_state(struct nvme_ana_group_desc *desc,
 }
 
 static int nvme_update_ana_state(struct nvme_ctrl *ctrl,
-		struct nvme_ana_group_desc *desc, void *data)
+				 struct nvme_ana_group_desc *desc, void *data)
 {
 	u32 nr_nsids = le32_to_cpu(desc->nnsids), n = 0;
 	unsigned *nr_change_groups = data;
 	struct nvme_ns *ns;
 	int srcu_idx;
 
-	dev_dbg(ctrl->device, "ANA group %d: %s.\n",
-			le32_to_cpu(desc->grpid),
-			nvme_ana_state_names[desc->state]);
+	dev_dbg(ctrl->device, "ANA group %d: %s.\n", le32_to_cpu(desc->grpid),
+		nvme_ana_state_names[desc->state]);
 
 	if (desc->state == NVME_ANA_CHANGE)
 		(*nr_change_groups)++;
@@ -945,14 +947,14 @@ static int nvme_read_ana_log(struct nvme_ctrl *ctrl)
 
 	mutex_lock(&ctrl->ana_lock);
 	error = nvme_get_log(ctrl, NVME_NSID_ALL, NVME_LOG_ANA, 0, NVME_CSI_NVM,
-			ctrl->ana_log_buf, ctrl->ana_log_size, 0);
+			     ctrl->ana_log_buf, ctrl->ana_log_size, 0);
 	if (error) {
 		dev_warn(ctrl->device, "Failed to get ANA log: %d\n", error);
 		goto out_unlock;
 	}
 
 	error = nvme_parse_ana_log(ctrl, &nr_change_groups,
-			nvme_update_ana_state);
+				   nvme_update_ana_state);
 	if (error)
 		goto out_unlock;
 
@@ -1014,12 +1016,13 @@ void nvme_mpath_stop(struct nvme_ctrl *ctrl)
 	cancel_work_sync(&ctrl->ana_work);
 }
 
-#define SUBSYS_ATTR_RW(_name, _mode, _show, _store)  \
-	struct device_attribute subsys_attr_##_name =	\
+#define SUBSYS_ATTR_RW(_name, _mode, _show, _store)   \
+	struct device_attribute subsys_attr_##_name = \
 		__ATTR(_name, _mode, _show, _store)
 
 static ssize_t nvme_subsys_iopolicy_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+					 struct device_attribute *attr,
+					 char *buf)
 {
 	struct nvme_subsystem *subsys =
 		container_of(dev, struct nvme_subsystem, dev);
@@ -1029,7 +1032,7 @@ static ssize_t nvme_subsys_iopolicy_show(struct device *dev,
 }
 
 static void nvme_subsys_iopolicy_update(struct nvme_subsystem *subsys,
-		int iopolicy)
+					int iopolicy)
 {
 	struct nvme_ctrl *ctrl;
 	int old_iopolicy = READ_ONCE(subsys->iopolicy);
@@ -1046,13 +1049,13 @@ static void nvme_subsys_iopolicy_update(struct nvme_subsystem *subsys,
 	mutex_unlock(&nvme_subsystems_lock);
 
 	pr_notice("subsysnqn %s iopolicy changed from %s to %s\n",
-			subsys->subnqn,
-			nvme_iopolicy_names[old_iopolicy],
-			nvme_iopolicy_names[iopolicy]);
+		  subsys->subnqn, nvme_iopolicy_names[old_iopolicy],
+		  nvme_iopolicy_names[iopolicy]);
 }
 
 static ssize_t nvme_subsys_iopolicy_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
+					  struct device_attribute *attr,
+					  const char *buf, size_t count)
 {
 	struct nvme_subsystem *subsys =
 		container_of(dev, struct nvme_subsystem, dev);
@@ -1067,18 +1070,18 @@ static ssize_t nvme_subsys_iopolicy_store(struct device *dev,
 
 	return -EINVAL;
 }
-SUBSYS_ATTR_RW(iopolicy, S_IRUGO | S_IWUSR,
-		      nvme_subsys_iopolicy_show, nvme_subsys_iopolicy_store);
+SUBSYS_ATTR_RW(iopolicy, S_IRUGO | S_IWUSR, nvme_subsys_iopolicy_show,
+	       nvme_subsys_iopolicy_store);
 
 static ssize_t ana_grpid_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
+			      char *buf)
 {
 	return sysfs_emit(buf, "%d\n", nvme_get_ns_from_dev(dev)->ana_grpid);
 }
 DEVICE_ATTR_RO(ana_grpid);
 
 static ssize_t ana_state_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
+			      char *buf)
 {
 	struct nvme_ns *ns = nvme_get_ns_from_dev(dev);
 
@@ -1087,7 +1090,7 @@ static ssize_t ana_state_show(struct device *dev, struct device_attribute *attr,
 DEVICE_ATTR_RO(ana_state);
 
 static ssize_t queue_depth_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+				struct device_attribute *attr, char *buf)
 {
 	struct nvme_ns *ns = nvme_get_ns_from_dev(dev);
 
@@ -1098,8 +1101,8 @@ static ssize_t queue_depth_show(struct device *dev,
 }
 DEVICE_ATTR_RO(queue_depth);
 
-static ssize_t numa_nodes_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
+static ssize_t numa_nodes_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
 {
 	int node, srcu_idx;
 	nodemask_t numa_nodes;
@@ -1114,8 +1117,8 @@ static ssize_t numa_nodes_show(struct device *dev, struct device_attribute *attr
 
 	srcu_idx = srcu_read_lock(&head->srcu);
 	for_each_node(node) {
-		current_ns = srcu_dereference(head->current_path[node],
-				&head->srcu);
+		current_ns =
+			srcu_dereference(head->current_path[node], &head->srcu);
 		if (ns == current_ns)
 			node_set(node, numa_nodes);
 	}
@@ -1126,7 +1129,8 @@ static ssize_t numa_nodes_show(struct device *dev, struct device_attribute *attr
 DEVICE_ATTR_RO(numa_nodes);
 
 static ssize_t delayed_removal_secs_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+					 struct device_attribute *attr,
+					 char *buf)
 {
 	struct gendisk *disk = dev_to_disk(dev);
 	struct nvme_ns_head *head = disk->private_data;
@@ -1139,7 +1143,8 @@ static ssize_t delayed_removal_secs_show(struct device *dev,
 }
 
 static ssize_t delayed_removal_secs_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
+					  struct device_attribute *attr,
+					  const char *buf, size_t count)
 {
 	struct gendisk *disk = dev_to_disk(dev);
 	struct nvme_ns_head *head = disk->private_data;
@@ -1169,7 +1174,8 @@ static ssize_t delayed_removal_secs_store(struct device *dev,
 DEVICE_ATTR_RW(delayed_removal_secs);
 
 static int nvme_lookup_ana_group_desc(struct nvme_ctrl *ctrl,
-		struct nvme_ana_group_desc *desc, void *data)
+				      struct nvme_ana_group_desc *desc,
+				      void *data)
 {
 	struct nvme_ana_group_desc *dst = data;
 
@@ -1231,12 +1237,13 @@ void nvme_mpath_add_sysfs_link(struct nvme_ns_head *head)
 		 * Create sysfs link from head gendisk kobject @kobj to the
 		 * ns path gendisk kobject @target->kobj.
 		 */
-		rc = sysfs_add_link_to_group(kobj, nvme_ns_mpath_attr_group.name,
-				&target->kobj, dev_name(target));
+		rc = sysfs_add_link_to_group(kobj,
+					     nvme_ns_mpath_attr_group.name,
+					     &target->kobj, dev_name(target));
 		if (unlikely(rc)) {
 			dev_err(disk_to_dev(ns->head->disk),
-					"failed to create link to %s\n",
-					dev_name(target));
+				"failed to create link to %s\n",
+				dev_name(target));
 			clear_bit(NVME_NS_SYSFS_ATTR_LINK, &ns->flags);
 		}
 	}
@@ -1255,7 +1262,7 @@ void nvme_mpath_remove_sysfs_link(struct nvme_ns *ns)
 	target = disk_to_dev(ns->disk);
 	kobj = &disk_to_dev(ns->head->disk)->kobj;
 	sysfs_remove_link_from_group(kobj, nvme_ns_mpath_attr_group.name,
-			dev_name(target));
+				     dev_name(target));
 	clear_bit(NVME_NS_SYSFS_ATTR_LINK, &ns->flags);
 }
 
@@ -1318,7 +1325,7 @@ void nvme_mpath_remove_disk(struct nvme_ns_head *head)
 		if (!try_module_get(THIS_MODULE))
 			goto out;
 		mod_delayed_work(nvme_wq, &head->remove_work,
-				head->delayed_removal_secs * HZ);
+				 head->delayed_removal_secs * HZ);
 	} else {
 		list_del_init(&head->entry);
 		remove = true;
@@ -1363,8 +1370,8 @@ int nvme_mpath_init_identify(struct nvme_ctrl *ctrl, struct nvme_id_ctrl *id)
 
 	if (!ctrl->max_namespaces ||
 	    ctrl->max_namespaces > le32_to_cpu(id->nn)) {
-		dev_err(ctrl->device,
-			"Invalid MNAN value %u\n", ctrl->max_namespaces);
+		dev_err(ctrl->device, "Invalid MNAN value %u\n",
+			ctrl->max_namespaces);
 		return -EINVAL;
 	}
 
@@ -1374,8 +1381,8 @@ int nvme_mpath_init_identify(struct nvme_ctrl *ctrl, struct nvme_id_ctrl *id)
 	ctrl->anagrpmax = le32_to_cpu(id->anagrpmax);
 
 	ana_log_size = sizeof(struct nvme_ana_rsp_hdr) +
-		ctrl->nanagrpid * sizeof(struct nvme_ana_group_desc) +
-		ctrl->max_namespaces * sizeof(__le32);
+		       ctrl->nanagrpid * sizeof(struct nvme_ana_group_desc) +
+		       ctrl->max_namespaces * sizeof(__le32);
 	if (ana_log_size > max_transfer_size) {
 		dev_err(ctrl->device,
 			"ANA log page size (%zd) larger than MDTS (%zd).\n",

@@ -25,8 +25,8 @@ static ssize_t nvme_sysfs_reset(struct device *dev,
 static DEVICE_ATTR(reset_controller, S_IWUSR, NULL, nvme_sysfs_reset);
 
 static ssize_t nvme_sysfs_rescan(struct device *dev,
-				struct device_attribute *attr, const char *buf,
-				size_t count)
+				 struct device_attribute *attr, const char *buf,
+				 size_t count)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 
@@ -35,8 +35,9 @@ static ssize_t nvme_sysfs_rescan(struct device *dev,
 }
 static DEVICE_ATTR(rescan_controller, S_IWUSR, NULL, nvme_sysfs_rescan);
 
-static ssize_t nvme_adm_passthru_err_log_enabled_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+static ssize_t
+nvme_adm_passthru_err_log_enabled_show(struct device *dev,
+				       struct device_attribute *attr, char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 
@@ -44,8 +45,10 @@ static ssize_t nvme_adm_passthru_err_log_enabled_show(struct device *dev,
 			  ctrl->passthru_err_log_enabled ? "on\n" : "off\n");
 }
 
-static ssize_t nvme_adm_passthru_err_log_enabled_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t
+nvme_adm_passthru_err_log_enabled_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 	bool passthru_err_log_enabled;
@@ -69,16 +72,20 @@ static inline struct nvme_ns_head *dev_to_ns_head(struct device *dev)
 	return nvme_get_ns_from_dev(dev)->head;
 }
 
-static ssize_t nvme_io_passthru_err_log_enabled_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+static ssize_t
+nvme_io_passthru_err_log_enabled_show(struct device *dev,
+				      struct device_attribute *attr, char *buf)
 {
 	struct nvme_ns_head *head = dev_to_ns_head(dev);
 
-	return sysfs_emit(buf, head->passthru_err_log_enabled ? "on\n" : "off\n");
+	return sysfs_emit(buf,
+			  head->passthru_err_log_enabled ? "on\n" : "off\n");
 }
 
-static ssize_t nvme_io_passthru_err_log_enabled_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t
+nvme_io_passthru_err_log_enabled_store(struct device *dev,
+				       struct device_attribute *attr,
+				       const char *buf, size_t count)
 {
 	struct nvme_ns_head *head = dev_to_ns_head(dev);
 	bool passthru_err_log_enabled;
@@ -92,16 +99,18 @@ static ssize_t nvme_io_passthru_err_log_enabled_store(struct device *dev,
 	return count;
 }
 
-static struct device_attribute dev_attr_adm_passthru_err_log_enabled = \
-	__ATTR(passthru_err_log_enabled, S_IRUGO | S_IWUSR, \
-	nvme_adm_passthru_err_log_enabled_show, nvme_adm_passthru_err_log_enabled_store);
+static struct device_attribute dev_attr_adm_passthru_err_log_enabled =
+	__ATTR(passthru_err_log_enabled, S_IRUGO | S_IWUSR,
+	       nvme_adm_passthru_err_log_enabled_show,
+	       nvme_adm_passthru_err_log_enabled_store);
 
-static struct device_attribute dev_attr_io_passthru_err_log_enabled = \
-	__ATTR(passthru_err_log_enabled, S_IRUGO | S_IWUSR, \
-	nvme_io_passthru_err_log_enabled_show, nvme_io_passthru_err_log_enabled_store);
+static struct device_attribute dev_attr_io_passthru_err_log_enabled =
+	__ATTR(passthru_err_log_enabled, S_IRUGO | S_IWUSR,
+	       nvme_io_passthru_err_log_enabled_show,
+	       nvme_io_passthru_err_log_enabled_store);
 
 static ssize_t wwid_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
+			 char *buf)
 {
 	struct nvme_ns_head *head = dev_to_ns_head(dev);
 	struct nvme_ns_ids *ids = &head->ids;
@@ -125,21 +134,21 @@ static ssize_t wwid_show(struct device *dev, struct device_attribute *attr,
 				 subsys->model[model_len - 1] == '\0'))
 		model_len--;
 
-	return sysfs_emit(buf, "nvme.%04x-%*phN-%*phN-%08x\n", subsys->vendor_id,
-		serial_len, subsys->serial, model_len, subsys->model,
-		head->ns_id);
+	return sysfs_emit(buf, "nvme.%04x-%*phN-%*phN-%08x\n",
+			  subsys->vendor_id, serial_len, subsys->serial,
+			  model_len, subsys->model, head->ns_id);
 }
 static DEVICE_ATTR_RO(wwid);
 
 static ssize_t nguid_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
+			  char *buf)
 {
 	return sysfs_emit(buf, "%pU\n", dev_to_ns_head(dev)->ids.nguid);
 }
 static DEVICE_ATTR_RO(nguid);
 
 static ssize_t uuid_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
+			 char *buf)
 {
 	struct nvme_ns_ids *ids = &dev_to_ns_head(dev)->ids;
 
@@ -147,8 +156,7 @@ static ssize_t uuid_show(struct device *dev, struct device_attribute *attr,
 	 * we have no UUID set
 	 */
 	if (uuid_is_null(&ids->uuid)) {
-		dev_warn_once(dev,
-			"No UUID available providing old NGUID\n");
+		dev_warn_once(dev, "No UUID available providing old NGUID\n");
 		return sysfs_emit(buf, "%pU\n", ids->nguid);
 	}
 	return sysfs_emit(buf, "%pU\n", &ids->uuid);
@@ -156,28 +164,28 @@ static ssize_t uuid_show(struct device *dev, struct device_attribute *attr,
 static DEVICE_ATTR_RO(uuid);
 
 static ssize_t eui_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
+			char *buf)
 {
 	return sysfs_emit(buf, "%8ph\n", dev_to_ns_head(dev)->ids.eui64);
 }
 static DEVICE_ATTR_RO(eui);
 
 static ssize_t nsid_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
+			 char *buf)
 {
 	return sysfs_emit(buf, "%d\n", dev_to_ns_head(dev)->ns_id);
 }
 static DEVICE_ATTR_RO(nsid);
 
 static ssize_t csi_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
+			char *buf)
 {
 	return sysfs_emit(buf, "%u\n", dev_to_ns_head(dev)->ids.csi);
 }
 static DEVICE_ATTR_RO(csi);
 
 static ssize_t metadata_bytes_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+				   struct device_attribute *attr, char *buf)
 {
 	return sysfs_emit(buf, "%u\n", dev_to_ns_head(dev)->ms);
 }
@@ -229,7 +237,7 @@ static int ns_update_nuse(struct nvme_ns *ns)
 }
 
 static ssize_t nuse_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
+			 char *buf)
 {
 	struct nvme_ns_head *head = dev_to_ns_head(dev);
 	struct gendisk *disk = dev_to_disk(dev);
@@ -267,7 +275,7 @@ static struct attribute *nvme_ns_attrs[] = {
 };
 
 static umode_t nvme_ns_attrs_are_visible(struct kobject *kobj,
-		struct attribute *a, int n)
+					 struct attribute *a, int n)
 {
 	struct device *dev = container_of(kobj, struct device, kobj);
 	struct nvme_ns_ids *ids = &dev_to_ns_head(dev)->ids;
@@ -308,8 +316,8 @@ static umode_t nvme_ns_attrs_are_visible(struct kobject *kobj,
 }
 
 static const struct attribute_group nvme_ns_attr_group = {
-	.attrs		= nvme_ns_attrs,
-	.is_visible	= nvme_ns_attrs_are_visible,
+	.attrs = nvme_ns_attrs,
+	.is_visible = nvme_ns_attrs_are_visible,
 };
 
 #ifdef CONFIG_NVME_MULTIPATH
@@ -337,7 +345,7 @@ static bool multipath_sysfs_group_visible(struct kobject *kobj)
 }
 
 static bool multipath_sysfs_attr_visible(struct kobject *kobj,
-		struct attribute *attr, int n)
+					 struct attribute *attr, int n)
 {
 	return false;
 }
@@ -345,9 +353,9 @@ static bool multipath_sysfs_attr_visible(struct kobject *kobj,
 DEFINE_SYSFS_GROUP_VISIBLE(multipath_sysfs)
 
 const struct attribute_group nvme_ns_mpath_attr_group = {
-	.name           = "multipath",
-	.attrs		= nvme_ns_mpath_attrs,
-	.is_visible     = SYSFS_GROUP_VISIBLE(multipath_sysfs),
+	.name = "multipath",
+	.attrs = nvme_ns_mpath_attrs,
+	.is_visible = SYSFS_GROUP_VISIBLE(multipath_sysfs),
 };
 #endif
 
@@ -359,28 +367,29 @@ const struct attribute_group *nvme_ns_attr_groups[] = {
 	NULL,
 };
 
-#define nvme_show_str_function(field)						\
-static ssize_t  field##_show(struct device *dev,				\
-			    struct device_attribute *attr, char *buf)		\
-{										\
-        struct nvme_ctrl *ctrl = dev_get_drvdata(dev);				\
-        return sysfs_emit(buf, "%.*s\n",					\
-		(int)sizeof(ctrl->subsys->field), ctrl->subsys->field);		\
-}										\
-static DEVICE_ATTR(field, S_IRUGO, field##_show, NULL);
+#define nvme_show_str_function(field)                                         \
+	static ssize_t field##_show(struct device *dev,                       \
+				    struct device_attribute *attr, char *buf) \
+	{                                                                     \
+		struct nvme_ctrl *ctrl = dev_get_drvdata(dev);                \
+		return sysfs_emit(buf, "%.*s\n",                              \
+				  (int)sizeof(ctrl->subsys->field),           \
+				  ctrl->subsys->field);                       \
+	}                                                                     \
+	static DEVICE_ATTR(field, S_IRUGO, field##_show, NULL);
 
 nvme_show_str_function(model);
 nvme_show_str_function(serial);
 nvme_show_str_function(firmware_rev);
 
-#define nvme_show_int_function(field)						\
-static ssize_t  field##_show(struct device *dev,				\
-			    struct device_attribute *attr, char *buf)		\
-{										\
-        struct nvme_ctrl *ctrl = dev_get_drvdata(dev);				\
-        return sysfs_emit(buf, "%d\n", ctrl->field);				\
-}										\
-static DEVICE_ATTR(field, S_IRUGO, field##_show, NULL);
+#define nvme_show_int_function(field)                                         \
+	static ssize_t field##_show(struct device *dev,                       \
+				    struct device_attribute *attr, char *buf) \
+	{                                                                     \
+		struct nvme_ctrl *ctrl = dev_get_drvdata(dev);                \
+		return sysfs_emit(buf, "%d\n", ctrl->field);                  \
+	}                                                                     \
+	static DEVICE_ATTR(field, S_IRUGO, field##_show, NULL);
 
 nvme_show_int_function(cntlid);
 nvme_show_int_function(numa_node);
@@ -389,8 +398,8 @@ nvme_show_int_function(sqsize);
 nvme_show_int_function(kato);
 
 static ssize_t nvme_sysfs_delete(struct device *dev,
-				struct device_attribute *attr, const char *buf,
-				size_t count)
+				 struct device_attribute *attr, const char *buf,
+				 size_t count)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 
@@ -414,19 +423,18 @@ static ssize_t nvme_sysfs_show_transport(struct device *dev,
 static DEVICE_ATTR(transport, S_IRUGO, nvme_sysfs_show_transport, NULL);
 
 static ssize_t nvme_sysfs_show_state(struct device *dev,
-				     struct device_attribute *attr,
-				     char *buf)
+				     struct device_attribute *attr, char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 	unsigned state = (unsigned)nvme_ctrl_state(ctrl);
 	static const char *const state_name[] = {
-		[NVME_CTRL_NEW]		= "new",
-		[NVME_CTRL_LIVE]	= "live",
-		[NVME_CTRL_RESETTING]	= "resetting",
-		[NVME_CTRL_CONNECTING]	= "connecting",
-		[NVME_CTRL_DELETING]	= "deleting",
-		[NVME_CTRL_DELETING_NOIO]= "deleting (no IO)",
-		[NVME_CTRL_DEAD]	= "dead",
+		[NVME_CTRL_NEW] = "new",
+		[NVME_CTRL_LIVE] = "live",
+		[NVME_CTRL_RESETTING] = "resetting",
+		[NVME_CTRL_CONNECTING] = "connecting",
+		[NVME_CTRL_DELETING] = "deleting",
+		[NVME_CTRL_DELETING_NOIO] = "deleting (no IO)",
+		[NVME_CTRL_DEAD] = "dead",
 	};
 
 	if (state < ARRAY_SIZE(state_name) && state_name[state])
@@ -448,8 +456,7 @@ static ssize_t nvme_sysfs_show_subsysnqn(struct device *dev,
 static DEVICE_ATTR(subsysnqn, S_IRUGO, nvme_sysfs_show_subsysnqn, NULL);
 
 static ssize_t nvme_sysfs_show_hostnqn(struct device *dev,
-					struct device_attribute *attr,
-					char *buf)
+				       struct device_attribute *attr, char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 
@@ -458,8 +465,7 @@ static ssize_t nvme_sysfs_show_hostnqn(struct device *dev,
 static DEVICE_ATTR(hostnqn, S_IRUGO, nvme_sysfs_show_hostnqn, NULL);
 
 static ssize_t nvme_sysfs_show_hostid(struct device *dev,
-					struct device_attribute *attr,
-					char *buf)
+				      struct device_attribute *attr, char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 
@@ -468,8 +474,7 @@ static ssize_t nvme_sysfs_show_hostid(struct device *dev,
 static DEVICE_ATTR(hostid, S_IRUGO, nvme_sysfs_show_hostid, NULL);
 
 static ssize_t nvme_sysfs_show_address(struct device *dev,
-					 struct device_attribute *attr,
-					 char *buf)
+				       struct device_attribute *attr, char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 
@@ -478,7 +483,7 @@ static ssize_t nvme_sysfs_show_address(struct device *dev,
 static DEVICE_ATTR(address, S_IRUGO, nvme_sysfs_show_address, NULL);
 
 static ssize_t nvme_ctrl_loss_tmo_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+				       struct device_attribute *attr, char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 	struct nvmf_ctrl_options *opts = ctrl->opts;
@@ -490,7 +495,8 @@ static ssize_t nvme_ctrl_loss_tmo_show(struct device *dev,
 }
 
 static ssize_t nvme_ctrl_loss_tmo_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
+					struct device_attribute *attr,
+					const char *buf, size_t count)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 	struct nvmf_ctrl_options *opts = ctrl->opts;
@@ -503,15 +509,16 @@ static ssize_t nvme_ctrl_loss_tmo_store(struct device *dev,
 	if (ctrl_loss_tmo < 0)
 		opts->max_reconnects = -1;
 	else
-		opts->max_reconnects = DIV_ROUND_UP(ctrl_loss_tmo,
-						opts->reconnect_delay);
+		opts->max_reconnects =
+			DIV_ROUND_UP(ctrl_loss_tmo, opts->reconnect_delay);
 	return count;
 }
-static DEVICE_ATTR(ctrl_loss_tmo, S_IRUGO | S_IWUSR,
-	nvme_ctrl_loss_tmo_show, nvme_ctrl_loss_tmo_store);
+static DEVICE_ATTR(ctrl_loss_tmo, S_IRUGO | S_IWUSR, nvme_ctrl_loss_tmo_show,
+		   nvme_ctrl_loss_tmo_store);
 
 static ssize_t nvme_ctrl_reconnect_delay_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+					      struct device_attribute *attr,
+					      char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 
@@ -521,7 +528,8 @@ static ssize_t nvme_ctrl_reconnect_delay_show(struct device *dev,
 }
 
 static ssize_t nvme_ctrl_reconnect_delay_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
+					       struct device_attribute *attr,
+					       const char *buf, size_t count)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 	unsigned int v;
@@ -535,10 +543,12 @@ static ssize_t nvme_ctrl_reconnect_delay_store(struct device *dev,
 	return count;
 }
 static DEVICE_ATTR(reconnect_delay, S_IRUGO | S_IWUSR,
-	nvme_ctrl_reconnect_delay_show, nvme_ctrl_reconnect_delay_store);
+		   nvme_ctrl_reconnect_delay_show,
+		   nvme_ctrl_reconnect_delay_store);
 
 static ssize_t nvme_ctrl_fast_io_fail_tmo_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+					       struct device_attribute *attr,
+					       char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 
@@ -548,7 +558,8 @@ static ssize_t nvme_ctrl_fast_io_fail_tmo_show(struct device *dev,
 }
 
 static ssize_t nvme_ctrl_fast_io_fail_tmo_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
+						struct device_attribute *attr,
+						const char *buf, size_t count)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 	struct nvmf_ctrl_options *opts = ctrl->opts;
@@ -565,12 +576,13 @@ static ssize_t nvme_ctrl_fast_io_fail_tmo_store(struct device *dev,
 	return count;
 }
 static DEVICE_ATTR(fast_io_fail_tmo, S_IRUGO | S_IWUSR,
-	nvme_ctrl_fast_io_fail_tmo_show, nvme_ctrl_fast_io_fail_tmo_store);
+		   nvme_ctrl_fast_io_fail_tmo_show,
+		   nvme_ctrl_fast_io_fail_tmo_store);
 
-static ssize_t cntrltype_show(struct device *dev,
-			      struct device_attribute *attr, char *buf)
+static ssize_t cntrltype_show(struct device *dev, struct device_attribute *attr,
+			      char *buf)
 {
-	static const char * const type[] = {
+	static const char *const type[] = {
 		[NVME_CTRL_IO] = "io\n",
 		[NVME_CTRL_DISC] = "discovery\n",
 		[NVME_CTRL_ADMIN] = "admin\n",
@@ -584,10 +596,10 @@ static ssize_t cntrltype_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(cntrltype);
 
-static ssize_t dctype_show(struct device *dev,
-			   struct device_attribute *attr, char *buf)
+static ssize_t dctype_show(struct device *dev, struct device_attribute *attr,
+			   char *buf)
 {
-	static const char * const type[] = {
+	static const char *const type[] = {
 		[NVME_DCTYPE_NOT_REPORTED] = "none\n",
 		[NVME_DCTYPE_DDC] = "ddc\n",
 		[NVME_DCTYPE_CDC] = "cdc\n",
@@ -603,7 +615,8 @@ static DEVICE_ATTR_RO(dctype);
 
 #ifdef CONFIG_NVME_HOST_AUTH
 static ssize_t nvme_ctrl_dhchap_secret_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+					    struct device_attribute *attr,
+					    char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 	struct nvmf_ctrl_options *opts = ctrl->opts;
@@ -614,7 +627,8 @@ static ssize_t nvme_ctrl_dhchap_secret_show(struct device *dev,
 }
 
 static ssize_t nvme_ctrl_dhchap_secret_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
+					     struct device_attribute *attr,
+					     const char *buf, size_t count)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 	struct nvmf_ctrl_options *opts = ctrl->opts;
@@ -658,10 +672,11 @@ static ssize_t nvme_ctrl_dhchap_secret_store(struct device *dev,
 }
 
 static DEVICE_ATTR(dhchap_secret, S_IRUGO | S_IWUSR,
-	nvme_ctrl_dhchap_secret_show, nvme_ctrl_dhchap_secret_store);
+		   nvme_ctrl_dhchap_secret_show, nvme_ctrl_dhchap_secret_store);
 
 static ssize_t nvme_ctrl_dhchap_ctrl_secret_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+						 struct device_attribute *attr,
+						 char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 	struct nvmf_ctrl_options *opts = ctrl->opts;
@@ -672,7 +687,8 @@ static ssize_t nvme_ctrl_dhchap_ctrl_secret_show(struct device *dev,
 }
 
 static ssize_t nvme_ctrl_dhchap_ctrl_secret_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
+						  struct device_attribute *attr,
+						  const char *buf, size_t count)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 	struct nvmf_ctrl_options *opts = ctrl->opts;
@@ -716,7 +732,8 @@ static ssize_t nvme_ctrl_dhchap_ctrl_secret_store(struct device *dev,
 }
 
 static DEVICE_ATTR(dhchap_ctrl_secret, S_IRUGO | S_IWUSR,
-	nvme_ctrl_dhchap_ctrl_secret_show, nvme_ctrl_dhchap_ctrl_secret_store);
+		   nvme_ctrl_dhchap_ctrl_secret_show,
+		   nvme_ctrl_dhchap_ctrl_secret_store);
 #endif
 
 static struct attribute *nvme_dev_attrs[] = {
@@ -751,7 +768,7 @@ static struct attribute *nvme_dev_attrs[] = {
 };
 
 static umode_t nvme_dev_attrs_are_visible(struct kobject *kobj,
-		struct attribute *a, int n)
+					  struct attribute *a, int n)
 {
 	struct device *dev = container_of(kobj, struct device, kobj);
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
@@ -781,14 +798,14 @@ static umode_t nvme_dev_attrs_are_visible(struct kobject *kobj,
 }
 
 const struct attribute_group nvme_dev_attrs_group = {
-	.attrs		= nvme_dev_attrs,
-	.is_visible	= nvme_dev_attrs_are_visible,
+	.attrs = nvme_dev_attrs,
+	.is_visible = nvme_dev_attrs_are_visible,
 };
 EXPORT_SYMBOL_GPL(nvme_dev_attrs_group);
 
 #ifdef CONFIG_NVME_TCP_TLS
-static ssize_t tls_key_show(struct device *dev,
-			    struct device_attribute *attr, char *buf)
+static ssize_t tls_key_show(struct device *dev, struct device_attribute *attr,
+			    char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 
@@ -799,7 +816,7 @@ static ssize_t tls_key_show(struct device *dev,
 static DEVICE_ATTR_RO(tls_key);
 
 static ssize_t tls_configured_key_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+				       struct device_attribute *attr, char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 	struct key *key = ctrl->opts->tls_key;
@@ -809,7 +826,7 @@ static ssize_t tls_configured_key_show(struct device *dev,
 static DEVICE_ATTR_RO(tls_configured_key);
 
 static ssize_t tls_keyring_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+				struct device_attribute *attr, char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 	struct key *keyring = ctrl->opts->keyring;
@@ -826,7 +843,7 @@ static struct attribute *nvme_tls_attrs[] = {
 };
 
 static umode_t nvme_tls_attrs_are_visible(struct kobject *kobj,
-		struct attribute *a, int n)
+					  struct attribute *a, int n)
 {
 	struct device *dev = container_of(kobj, struct device, kobj);
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
@@ -834,22 +851,21 @@ static umode_t nvme_tls_attrs_are_visible(struct kobject *kobj,
 	if (!ctrl->opts || strcmp(ctrl->opts->transport, "tcp"))
 		return 0;
 
-	if (a == &dev_attr_tls_key.attr &&
-	    !ctrl->opts->tls && !ctrl->opts->concat)
+	if (a == &dev_attr_tls_key.attr && !ctrl->opts->tls &&
+	    !ctrl->opts->concat)
 		return 0;
 	if (a == &dev_attr_tls_configured_key.attr &&
 	    (!ctrl->opts->tls_key || ctrl->opts->concat))
 		return 0;
-	if (a == &dev_attr_tls_keyring.attr &&
-	    !ctrl->opts->keyring)
+	if (a == &dev_attr_tls_keyring.attr && !ctrl->opts->keyring)
 		return 0;
 
 	return a->mode;
 }
 
 static const struct attribute_group nvme_tls_attrs_group = {
-	.attrs		= nvme_tls_attrs,
-	.is_visible	= nvme_tls_attrs_are_visible,
+	.attrs = nvme_tls_attrs,
+	.is_visible = nvme_tls_attrs_are_visible,
 };
 #endif
 
@@ -861,13 +877,12 @@ const struct attribute_group *nvme_dev_attr_groups[] = {
 	NULL,
 };
 
-#define SUBSYS_ATTR_RO(_name, _mode, _show)			\
+#define SUBSYS_ATTR_RO(_name, _mode, _show)           \
 	struct device_attribute subsys_attr_##_name = \
 		__ATTR(_name, _mode, _show, NULL)
 
 static ssize_t nvme_subsys_show_nqn(struct device *dev,
-				    struct device_attribute *attr,
-				    char *buf)
+				    struct device_attribute *attr, char *buf)
 {
 	struct nvme_subsystem *subsys =
 		container_of(dev, struct nvme_subsystem, dev);
@@ -877,8 +892,7 @@ static ssize_t nvme_subsys_show_nqn(struct device *dev,
 static SUBSYS_ATTR_RO(subsysnqn, S_IRUGO, nvme_subsys_show_nqn);
 
 static ssize_t nvme_subsys_show_type(struct device *dev,
-				    struct device_attribute *attr,
-				    char *buf)
+				     struct device_attribute *attr, char *buf)
 {
 	struct nvme_subsystem *subsys =
 		container_of(dev, struct nvme_subsystem, dev);
@@ -894,16 +908,16 @@ static ssize_t nvme_subsys_show_type(struct device *dev,
 }
 static SUBSYS_ATTR_RO(subsystype, S_IRUGO, nvme_subsys_show_type);
 
-#define nvme_subsys_show_str_function(field)				\
-static ssize_t subsys_##field##_show(struct device *dev,		\
-			    struct device_attribute *attr, char *buf)	\
-{									\
-	struct nvme_subsystem *subsys =					\
-		container_of(dev, struct nvme_subsystem, dev);		\
-	return sysfs_emit(buf, "%.*s\n",				\
-			   (int)sizeof(subsys->field), subsys->field);	\
-}									\
-static SUBSYS_ATTR_RO(field, S_IRUGO, subsys_##field##_show);
+#define nvme_subsys_show_str_function(field)                                  \
+	static ssize_t subsys_##field##_show(                                 \
+		struct device *dev, struct device_attribute *attr, char *buf) \
+	{                                                                     \
+		struct nvme_subsystem *subsys =                               \
+			container_of(dev, struct nvme_subsystem, dev);        \
+		return sysfs_emit(buf, "%.*s\n", (int)sizeof(subsys->field),  \
+				  subsys->field);                             \
+	}                                                                     \
+	static SUBSYS_ATTR_RO(field, S_IRUGO, subsys_##field##_show);
 
 nvme_subsys_show_str_function(model);
 nvme_subsys_show_str_function(serial);
