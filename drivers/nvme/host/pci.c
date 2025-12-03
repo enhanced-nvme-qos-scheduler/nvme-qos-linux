@@ -1241,7 +1241,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	struct nvme_queue *nvmeq = hctx->driver_data;
 	struct nvme_dev *dev = nvmeq->dev;
 	struct request *req = bd->rq;
-	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
+	// struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
 	blk_status_t ret;
 
 	/*
@@ -1254,11 +1254,11 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (unlikely(!nvme_check_ready(&dev->ctrl, req, true)))
 		return nvme_fail_nonready_command(&dev->ctrl, req);
 
+	ret = nvme_prep_rq(req);
+	if (unlikely(ret))
+	return ret;
 	// ---------------------------------------------------------
     // OLD CODE: Direct Submission (Delete or Comment Out)
-	// ret = nvme_prep_rq(req);
-	// if (unlikely(ret))
-	// 	return ret;
 	// spin_lock(&nvmeq->sq_lock);
 	// nvme_sq_copy_cmd(nvmeq, &iod->cmd);
 	// nvme_write_sq_db(nvmeq, bd->last);
@@ -1267,37 +1267,58 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	/* === NEW CODE: QoS Enqueue === */
     spin_lock(&nvmeq->sq_lock); // Lock the queue
 
-    // 1. Classify and Enqueue
-    if (req->ioprio == IOPRIO_CLASS_RT) {
+    /* 1. Classify and Enqueue 
+     * FIX: Use bio->bi_ioprio because req->ioprio might be missing in this kernel version.
+     * We check if bio exists first to avoid crashing on NULL.
+     */
+    /* === DEBUG MODE: LOG EVERYTHING === */
+    unsigned short prio = req->bio ? req->bio->bi_ioprio : IOPRIO_CLASS_BE;
+    int prio_class = IOPRIO_PRIO_CLASS(prio);
+
+    /* --- CLASSIFICATION LOGIC --- */
+    
+    /* A. MAGIC TRIGGER: If size is exactly 4096 bytes, force HIGH PRIO.
+     * This allows us to test easily using 'dd bs=4096'.
+     * We use printk() (not ratelimited) to ensure we SEE it.
+     */
+    if (blk_rq_bytes(req) == 4096) {
+         printk(KERN_ERR "NVMe QoS: MAGIC TRIGGER! Moving to High Prio! (Tag %d)\n", req->tag);
+         list_add_tail(&req->queuelist, &nvmeq->high_prio_list);
+    } 
+    /* B. Standard Real-Time Priority Check */
+    else if (prio_class == IOPRIO_CLASS_RT) {
+        printk_ratelimited(KERN_ERR "NVMe QoS: HIGH PRIO (Class RT) Detected!\n");
         list_add_tail(&req->queuelist, &nvmeq->high_prio_list);
-    } else {
+    } 
+    /* C. Normal Priority (Everything else) */
+    else {
+        /* Keep this ratelimited so we don't freeze the console during boot */
+        // printk_ratelimited(KERN_ERR "NVMe QoS: Normal Prio (Size %u)\n", blk_rq_bytes(req)); 
         list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
     }
 
-    // 2. Dispatch Loop (Drain our internal queues into the hardware)
-    // We try to pull as many as the hardware can handle right now.
+    /* 2. Dispatch Loop */
     while (true) {
         struct request *next_req;
+        struct nvme_iod *next_iod; /* FIX: Declare this pointer type */
         
-        // Pick the winner using WRR
         next_req = nvme_qos_dequeue_wrr(nvmeq);
         if (!next_req) 
-            break; // No work left
+            break; 
 
-        // Prepare the hardware command
-        // Note: nvme_prep_rq usually doesn't need the lock, 
-        // but for simplicity in this shim, we do it here. 
-        // (You might need to adjust locking scope if nvme_prep_rq sleeps, 
-        // but standard NVMe prep is usually atomic-safe).
-        
-        // Actually submit to hardware
-        nvme_submit_cmd(nvmeq, &blk_mq_rq_to_pdu(next_req)->cmd, true);
+        /* FIX: Cast the PDU to nvme_iod so we can access .cmd */
+        next_iod = blk_mq_rq_to_pdu(next_req);
+
+        /* FIX: Manually copy the command to the Hardware Queue */
+        nvme_sq_copy_cmd(nvmeq, &next_iod->cmd);
     }
 
+    /* FIX: Ring the Doorbell once at the end to tell Hardware to fetch */
+    nvme_write_sq_db(nvmeq, true);
+
     spin_unlock(&nvmeq->sq_lock);
-
-
-	return BLK_STS_OK;
+    
+    return BLK_STS_OK;
 }
 
 static void nvme_submit_cmds(struct nvme_queue *nvmeq, struct rq_list *rqlist)
