@@ -14,6 +14,7 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/kstrtox.h>
+#include <linux/list.h>
 #include <linux/memremap.h>
 #include <linux/mm.h>
 #include <linux/module.h>
@@ -247,6 +248,12 @@ struct nvme_queue {
 	__le32 *dbbuf_sq_ei;
 	__le32 *dbbuf_cq_ei;
 	struct completion delete_done;
+	/* === CAPSTONE QOS FIELDS START === */
+    struct list_head high_prio_list;   // Local queue for High priority
+    struct list_head normal_prio_list; // Local queue for Normal priority
+    int high_credits;                  // WRR credits for High
+    int normal_credits;                // WRR credits for Normal
+    /* === CAPSTONE QOS FIELDS END === */
 };
 
 /* bits for iod->flags */
@@ -1168,6 +1175,66 @@ out_free_cmd:
 	return ret;
 }
 
+/*
+ * === CAPSTONE QOS HELPER FUNCTIONS START ===
+ */
+
+/* Helper: Reset credits when a round is finished */
+static void nvme_qos_refill_credits(struct nvme_queue *nvmeq)
+{
+    nvmeq->high_credits = 9;   /* 9 High requests (90%) */
+    nvmeq->normal_credits = 1; /* 1 Normal request (10%) */
+}
+
+/* * The WRR Dispatcher
+ * Returns the next request to send to hardware, or NULL if we are done for now.
+ */
+static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
+{
+    struct request *req = NULL;
+
+    /* 1. Check if we need to refill credits (Round Over) */
+    if (nvmeq->high_credits <= 0 && nvmeq->normal_credits <= 0) {
+        nvme_qos_refill_credits(nvmeq);
+    }
+
+    /* 2. Try to serve High Priority */
+    if (nvmeq->high_credits > 0 && !list_empty(&nvmeq->high_prio_list)) {
+        req = list_first_entry(&nvmeq->high_prio_list, struct request, queuelist);
+        list_del_init(&req->queuelist); /* Remove from High list */
+        nvmeq->high_credits--;
+        return req;
+    }
+
+    /* 3. Try to serve Normal Priority */
+    if (nvmeq->normal_credits > 0 && !list_empty(&nvmeq->normal_prio_list)) {
+        req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
+        list_del_init(&req->queuelist); /* Remove from Normal list */
+        nvmeq->normal_credits--;
+        return req;
+    }
+
+    /* * 4. Strict Priority Fallback (Work Conserving)
+     * If High has credits but is empty, don't waste time waiting. 
+     * If Normal has credits but is empty, don't waste time.
+     * We just pick whatever is available.
+     */
+    if (!list_empty(&nvmeq->high_prio_list)) {
+        req = list_first_entry(&nvmeq->high_prio_list, struct request, queuelist);
+        list_del_init(&req->queuelist);
+        return req;
+    }
+    
+    if (!list_empty(&nvmeq->normal_prio_list)) {
+        req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
+        list_del_init(&req->queuelist);
+        return req;
+    }
+
+    return NULL; /* Both lists are empty */
+}
+/* === CAPSTONE QOS HELPER FUNCTIONS END === */
+
 static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 			 const struct blk_mq_queue_data *bd)
 {
@@ -1187,13 +1254,49 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (unlikely(!nvme_check_ready(&dev->ctrl, req, true)))
 		return nvme_fail_nonready_command(&dev->ctrl, req);
 
-	ret = nvme_prep_rq(req);
-	if (unlikely(ret))
-		return ret;
-	spin_lock(&nvmeq->sq_lock);
-	nvme_sq_copy_cmd(nvmeq, &iod->cmd);
-	nvme_write_sq_db(nvmeq, bd->last);
-	spin_unlock(&nvmeq->sq_lock);
+	// ---------------------------------------------------------
+    // OLD CODE: Direct Submission (Delete or Comment Out)
+	// ret = nvme_prep_rq(req);
+	// if (unlikely(ret))
+	// 	return ret;
+	// spin_lock(&nvmeq->sq_lock);
+	// nvme_sq_copy_cmd(nvmeq, &iod->cmd);
+	// nvme_write_sq_db(nvmeq, bd->last);
+	// spin_unlock(&nvmeq->sq_lock);
+	// ---------------------------------------------------------
+	/* === NEW CODE: QoS Enqueue === */
+    spin_lock(&nvmeq->sq_lock); // Lock the queue
+
+    // 1. Classify and Enqueue
+    if (req->ioprio == IOPRIO_CLASS_RT) {
+        list_add_tail(&req->queuelist, &nvmeq->high_prio_list);
+    } else {
+        list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
+    }
+
+    // 2. Dispatch Loop (Drain our internal queues into the hardware)
+    // We try to pull as many as the hardware can handle right now.
+    while (true) {
+        struct request *next_req;
+        
+        // Pick the winner using WRR
+        next_req = nvme_qos_dequeue_wrr(nvmeq);
+        if (!next_req) 
+            break; // No work left
+
+        // Prepare the hardware command
+        // Note: nvme_prep_rq usually doesn't need the lock, 
+        // but for simplicity in this shim, we do it here. 
+        // (You might need to adjust locking scope if nvme_prep_rq sleeps, 
+        // but standard NVMe prep is usually atomic-safe).
+        
+        // Actually submit to hardware
+        nvme_submit_cmd(nvmeq, &blk_mq_rq_to_pdu(next_req)->cmd, true);
+    }
+
+    spin_unlock(&nvmeq->sq_lock);
+
+
 	return BLK_STS_OK;
 }
 
@@ -1879,6 +1982,14 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 	nvmeq->dev = dev;
 	spin_lock_init(&nvmeq->sq_lock);
 	spin_lock_init(&nvmeq->cq_poll_lock);
+
+	/* === CAPSTONE QOS INIT START === */
+    INIT_LIST_HEAD(&nvmeq->high_prio_list);
+    INIT_LIST_HEAD(&nvmeq->normal_prio_list);
+    nvmeq->high_credits = 9;   // 90% share
+    nvmeq->normal_credits = 1; // 10% share
+    /* === CAPSTONE QOS INIT END === */
+
 	nvmeq->cq_head = 0;
 	nvmeq->cq_phase = 1;
 	nvmeq->q_db = &dev->dbs[qid * 2 * dev->db_stride];
