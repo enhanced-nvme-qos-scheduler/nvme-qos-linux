@@ -246,8 +246,6 @@ static ssize_t nuse_show(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RO(nuse);
 
-/* === CAPSTONE QOS NAMESPACE POLICY === */
-
 static ssize_t nvme_qos_policy_show(struct device *dev,
                                     struct device_attribute *attr, char *buf)
 {
@@ -289,7 +287,6 @@ static ssize_t nvme_qos_policy_store(struct device *dev,
     return ret;
 }
 static DEVICE_ATTR(qos_policy, S_IRUGO | S_IWUSR, nvme_qos_policy_show, nvme_qos_policy_store);
-/* ===================================== */
 
 static struct attribute *nvme_ns_attrs[] = {
 	&dev_attr_wwid.attr,
@@ -300,9 +297,7 @@ static struct attribute *nvme_ns_attrs[] = {
 	&dev_attr_nsid.attr,
 	&dev_attr_metadata_bytes.attr,
 	&dev_attr_nuse.attr,
-	/* ========= CAPSTONE QOS  ======= */
     &dev_attr_qos_policy.attr,
-    /* =============================== */
 #ifdef CONFIG_NVME_MULTIPATH
 	&dev_attr_ana_grpid.attr,
 	&dev_attr_ana_state.attr,
