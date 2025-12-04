@@ -191,6 +191,12 @@ struct nvme_dev {
 	unsigned int nr_allocated_queues;
 	unsigned int nr_write_queues;
 	unsigned int nr_poll_queues;
+
+	/* === CAPSTONE QOS CONFIG === */
+    unsigned int qos_enabled;      /* 0 = Off, 1 = On */
+    unsigned int qos_high_weight;  /* Default: 9 */
+    /* =========================== */
+	
 	struct nvme_descriptor_pools descriptor_pools[];
 };
 
@@ -1182,7 +1188,7 @@ out_free_cmd:
 /* Helper: Reset credits when a round is finished */
 static void nvme_qos_refill_credits(struct nvme_queue *nvmeq)
 {
-    nvmeq->high_credits = 9;   /* 9 High requests (90%) */
+    nvmeq->high_credits = nvmeq->dev->qos_high_weight;
     nvmeq->normal_credits = 1; /* 1 Normal request (10%) */
 }
 
@@ -1238,10 +1244,14 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 			 const struct blk_mq_queue_data *bd)
 {
+	// /* === NUCLEAR DEBUG === */
+    // printk(KERN_ERR "NVMe: QueueRQ called! Size=%u\n", blk_rq_bytes(bd->rq));
+    // /* ===================== */
 	struct nvme_queue *nvmeq = hctx->driver_data;
 	struct nvme_dev *dev = nvmeq->dev;
 	struct request *req = bd->rq;
-	// struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
+	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
+	struct nvme_ns *ns = req->q->queuedata; /* Get the Namespace (e.g. nvme0n1) */
 	blk_status_t ret;
 
 	/*
@@ -1256,7 +1266,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	ret = nvme_prep_rq(req);
 	if (unlikely(ret))
-	return ret;
+		return ret;
 	// ---------------------------------------------------------
     // OLD CODE: Direct Submission (Delete or Comment Out)
 	// spin_lock(&nvmeq->sq_lock);
@@ -1264,6 +1274,27 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	// nvme_write_sq_db(nvmeq, bd->last);
 	// spin_unlock(&nvmeq->sq_lock);
 	// ---------------------------------------------------------
+
+	// /* === DEBUG: PRE-CHECK === */
+    // /* Print BEFORE checking enabled/disabled. This MUST show up. */
+    // if (blk_rq_bytes(req) == 4096) {
+    //     printk(KERN_ERR "NVMe Trace: Request 4096B received. Enabled=%u\n", 
+    //            dev->qos_enabled);
+    // }
+
+	/* === BYPASS CHECK === */
+    /* If QoS is disabled, treat everything as Normal (First-In-First-Out) 
+     * We just add to normal_list and dispatch immediately.
+     */
+    if (unlikely(dev->qos_enabled == 0)) {
+        spin_lock(&nvmeq->sq_lock);
+        nvme_sq_copy_cmd(nvmeq, &iod->cmd);
+        nvme_write_sq_db(nvmeq, true);
+        spin_unlock(&nvmeq->sq_lock);
+        return BLK_STS_OK;
+    }
+    /* ==================== */
+
 	/* === NEW CODE: QoS Enqueue === */
     spin_lock(&nvmeq->sq_lock); // Lock the queue
 
@@ -1274,26 +1305,43 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
     /* === DEBUG MODE: LOG EVERYTHING === */
     unsigned short prio = req->bio ? req->bio->bi_ioprio : IOPRIO_CLASS_BE;
     int prio_class = IOPRIO_PRIO_CLASS(prio);
+	bool is_high_prio = false;
+
+	// /* === DEBUG: WHAT IS HAPPENING? === */
+    // /* Print the status of EVERY request that makes it here. */
+    // printk(KERN_ERR "NVMe Debug: Req Size=%u | PrioClass=%d | Enabled=%u\n", 
+    //        blk_rq_bytes(req), 
+    //        prio_class,
+    //        dev->qos_enabled);
+    // /* ================================= */
 
     /* --- CLASSIFICATION LOGIC --- */
     
-    /* A. MAGIC TRIGGER: If size is exactly 4096 bytes, force HIGH PRIO.
-     * This allows us to test easily using 'dd bs=4096'.
-     * We use printk() (not ratelimited) to ensure we SEE it.
-     */
-    if (blk_rq_bytes(req) == 4096) {
-         printk(KERN_ERR "NVMe QoS: MAGIC TRIGGER! Moving to High Prio! (Tag %d)\n", req->tag);
-         list_add_tail(&req->queuelist, &nvmeq->high_prio_list);
+    /* 1. Check Namespace Policy (If this request belongs to a namespace) */
+    if (ns) {
+        if (ns->qos_policy == NVME_QOS_FORCE_HIGH) {
+            is_high_prio = true;
+            /* Debug print to prove Policy works (Ratelimited) */
+            printk_ratelimited(KERN_ERR "NVMe QoS: Policy FORCE HIGH applied! (Tag %d)\n", req->tag);
+        }
+        else if (ns->qos_policy == NVME_QOS_FORCE_NORMAL) {
+            is_high_prio = false;
+        }
+        else {
+            /* 2. Default Policy: Trust the App's IOPRIO */
+            if (prio_class == IOPRIO_CLASS_RT)
+                is_high_prio = true;
+        }
     } 
-    /* B. Standard Real-Time Priority Check */
+    /* 3. Admin commands (no namespace) default to High if RT, else Normal */
     else if (prio_class == IOPRIO_CLASS_RT) {
-        printk_ratelimited(KERN_ERR "NVMe QoS: HIGH PRIO (Class RT) Detected!\n");
+        is_high_prio = true;
+    }
+
+    /* Enqueue based on decision */
+    if (is_high_prio) {
         list_add_tail(&req->queuelist, &nvmeq->high_prio_list);
-    } 
-    /* C. Normal Priority (Everything else) */
-    else {
-        /* Keep this ratelimited so we don't freeze the console during boot */
-        // printk_ratelimited(KERN_ERR "NVMe QoS: Normal Prio (Size %u)\n", blk_rq_bytes(req)); 
+    } else {
         list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
     }
 
@@ -2665,6 +2713,60 @@ static ssize_t hmb_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RW(hmb);
 
+/* === CAPSTONE QOS SYSFS INTERFACE START === */
+
+/* 1. ENABLE SWITCH */
+static ssize_t qos_enable_show(struct device *dev, struct device_attribute *attr,
+                               char *buf)
+{
+    struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+    return sysfs_emit(buf, "%d\n", ndev->qos_enabled);
+}
+
+static ssize_t qos_enable_store(struct device *dev, struct device_attribute *attr,
+                                const char *buf, size_t count)
+{
+    struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+    bool enable;
+    
+    if (kstrtobool(buf, &enable) < 0)
+        return -EINVAL;
+
+    ndev->qos_enabled = enable;
+    dev_info(dev, "NVMe QoS Scheduler: %s\n", enable ? "ENABLED" : "DISABLED");
+    return count;
+}
+static DEVICE_ATTR_RW(qos_enable);
+
+/* 2. HIGH PRIORITY WEIGHT */
+static ssize_t qos_weight_show(struct device *dev, struct device_attribute *attr,
+                               char *buf)
+{
+    struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+    return sysfs_emit(buf, "%u\n", ndev->qos_high_weight);
+}
+
+static ssize_t qos_weight_store(struct device *dev, struct device_attribute *attr,
+                                const char *buf, size_t count)
+{
+    struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+    unsigned int val;
+
+    if (kstrtouint(buf, 10, &val) < 0)
+        return -EINVAL;
+
+    /* Sanity check: Don't allow 0, it might cause starvation */
+    if (val == 0)
+        val = 1;
+
+    ndev->qos_high_weight = val;
+    dev_info(dev, "NVMe QoS: High Priority Weight set to %u\n", val);
+    return count;
+}
+static DEVICE_ATTR_RW(qos_weight);
+
+/* === CAPSTONE QOS SYSFS INTERFACE END === */
+
 static umode_t nvme_pci_attrs_are_visible(struct kobject *kobj,
 		struct attribute *a, int n)
 {
@@ -2689,6 +2791,10 @@ static struct attribute *nvme_pci_attrs[] = {
 	&dev_attr_cmbloc.attr,
 	&dev_attr_cmbsz.attr,
 	&dev_attr_hmb.attr,
+	/* === CAPSTONE QOS FILES === */
+    &dev_attr_qos_enable.attr,
+    &dev_attr_qos_weight.attr,
+    /* ========================== */
 	NULL,
 };
 
@@ -3542,6 +3648,12 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 			dma_opt_mapping_size(&pdev->dev) >> 9);
 	dev->ctrl.max_segments = NVME_MAX_SEGS;
 	dev->ctrl.max_integrity_segments = 1;
+
+	/* === CAPSTONE QOS DEFAULTS === */
+    dev->qos_enabled = 0;      /* Default to OFF (Safety) */
+    dev->qos_high_weight = 9;  /* Default 9:1 ratio */
+    /* ============================= */
+
 	return dev;
 
 out_put_device:
