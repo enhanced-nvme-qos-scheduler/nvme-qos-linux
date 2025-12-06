@@ -1,3 +1,6 @@
+
+/*Making commit to detail planned changes in Winter term*/
+
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2011-2014, Intel Corporation.
