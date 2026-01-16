@@ -267,22 +267,25 @@ static ssize_t nvme_qos_policy_store(struct device *dev,
 {
     struct nvme_ns *ns = nvme_get_ns_from_dev(dev);
     int ret = count;
+	unsigned int new_policy;
 
     if (sysfs_streq(buf, "force_high")) {
-        ns->qos_policy = NVME_QOS_FORCE_HIGH;
+        new_policy = NVME_QOS_FORCE_HIGH;
         dev_info(dev, "NVMe QoS: Policy set to FORCE HIGH\n");
     }
     else if (sysfs_streq(buf, "force_normal")) {
-        ns->qos_policy = NVME_QOS_FORCE_NORMAL;
+        new_policy = NVME_QOS_FORCE_NORMAL;
         dev_info(dev, "NVMe QoS: Policy set to FORCE NORMAL\n");
     }
     else if (sysfs_streq(buf, "default")) {
-        ns->qos_policy = NVME_QOS_DEFAULT;
+        new_policy = NVME_QOS_DEFAULT;
         dev_info(dev, "NVMe QoS: Policy set to DEFAULT\n");
     }
     else {
         return -EINVAL;
     }
+	
+	WRITE_ONCE(ns->qos_policy, new_policy);
 
     return ret;
 }
