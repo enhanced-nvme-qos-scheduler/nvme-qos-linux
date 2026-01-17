@@ -1261,9 +1261,14 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
     /* Classification */
 	prio = req->bio ? req->bio->bi_ioprio : IOPRIO_CLASS_BE;
 
-	if (ns && ns->qos_policy == NVME_QOS_FORCE_HIGH) {
+	unsigned int current_policy = 0;
+	if(ns){
+		current_policy = READ_ONCE(ns->qos_policy);
+	}
+
+	if (current_policy == NVME_QOS_FORCE_HIGH) {
 		is_high_prio = true;
-	} else if (ns && ns->qos_policy == NVME_QOS_FORCE_NORMAL) {
+	} else if (current_policy == NVME_QOS_FORCE_NORMAL) {
 		is_high_prio = false;
 	} else if (IOPRIO_PRIO_CLASS(prio) == IOPRIO_CLASS_RT) {
 		is_high_prio = true;
