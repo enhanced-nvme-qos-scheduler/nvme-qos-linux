@@ -1397,6 +1397,8 @@ static __always_inline void nvme_pci_unmap_rq(struct request *req)
 
 static void nvme_pci_complete_rq(struct request *req)
 {
+	struct nvme_queue *nvmeq = req->mq_hctx->driver_data;
+
 	/* --- DEBUG LOG --- */
     if (nvmeq->dev->qos_enabled) {
          printk_ratelimited(KERN_INFO "TRACE: [4] Completed Tag %d\n", req->tag);
