@@ -1222,6 +1222,16 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 	return NULL;
 }
 
+/* Helper to count list size for debugging */
+static int debug_list_count(struct list_head *head)
+{
+    struct list_head *pos;
+    int count = 0;
+    list_for_each(pos, head) {
+        count++;
+    }
+    return count;
+}
 
 static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 			 const struct blk_mq_queue_data *bd)
@@ -1298,6 +1308,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	return BLK_STS_OK;
 }
 
+#if 0
 static void nvme_submit_cmds(struct nvme_queue *nvmeq, struct rq_list *rqlist)
 {
 	struct request *req;
@@ -1329,6 +1340,7 @@ static bool nvme_prep_rq_batch(struct nvme_queue *nvmeq, struct request *req)
 	return nvme_prep_rq(req) == BLK_STS_OK;
 }
 
+/*
 static void nvme_queue_rqs(struct rq_list *rqlist)
 {
 	struct rq_list submit_list = { };
@@ -1351,6 +1363,8 @@ static void nvme_queue_rqs(struct rq_list *rqlist)
 		nvme_submit_cmds(nvmeq, &submit_list);
 	*rqlist = requeue_list;
 }
+*/
+#endif
 
 static __always_inline void nvme_pci_unmap_rq(struct request *req)
 {
@@ -2114,7 +2128,7 @@ static const struct blk_mq_ops nvme_mq_admin_ops = {
 
 static const struct blk_mq_ops nvme_mq_ops = {
 	.queue_rq	= nvme_queue_rq,
-	.queue_rqs	= nvme_queue_rqs,
+	// .queue_rqs	= nvme_queue_rqs,
 	.complete	= nvme_pci_complete_rq,
 	.commit_rqs	= nvme_commit_rqs,
 	.init_hctx	= nvme_init_hctx,
