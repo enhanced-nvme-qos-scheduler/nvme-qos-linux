@@ -1189,6 +1189,18 @@ static void nvme_qos_refill_credits(struct nvme_queue *nvmeq)
 	nvmeq->normal_credits = 1;
 }
 
+/* Helper to count list size for debugging */
+static int debug_list_count(struct list_head *head)
+{
+    struct list_head *pos;
+    int count = 0;
+    list_for_each(pos, head) {
+        count++;
+    }
+    return count;
+}
+
+
 static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 {
 	struct request *req = NULL;
@@ -1236,17 +1248,6 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 	}
 
 	return NULL;
-}
-
-/* Helper to count list size for debugging */
-static int debug_list_count(struct list_head *head)
-{
-    struct list_head *pos;
-    int count = 0;
-    list_for_each(pos, head) {
-        count++;
-    }
-    return count;
 }
 
 static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
@@ -1396,6 +1397,12 @@ static __always_inline void nvme_pci_unmap_rq(struct request *req)
 
 static void nvme_pci_complete_rq(struct request *req)
 {
+	/* --- DEBUG LOG --- */
+    if (nvmeq->dev->qos_enabled) {
+         printk_ratelimited(KERN_INFO "TRACE: [4] Completed Tag %d\n", req->tag);
+    }
+    /* ---------------- */
+
 	nvme_pci_unmap_rq(req);
 	nvme_complete_rq(req);
 }
