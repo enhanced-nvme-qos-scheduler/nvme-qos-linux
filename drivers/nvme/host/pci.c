@@ -583,6 +583,12 @@ static inline void nvme_write_sq_db(struct nvme_queue *nvmeq, bool write_sq)
 static inline void nvme_sq_copy_cmd(struct nvme_queue *nvmeq,
 				    struct nvme_command *cmd)
 {
+	/* --- DEBUG LOG --- */
+    if (nvmeq->dev && nvmeq->dev->qos_enabled) {
+         printk_ratelimited(KERN_INFO "TRACE: [3] Dispatching to HW (Doorbell Ring)\n");
+    }
+    /* ---------------- */
+
 	memcpy(nvmeq->sq_cmds + (nvmeq->sq_tail << nvmeq->sqes),
 		absolute_pointer(cmd), sizeof(*cmd));
 	if (++nvmeq->sq_tail == nvmeq->q_depth)
