@@ -1300,11 +1300,11 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	}
 
 	/* Enqueue */
-	if (is_high_prio)
+	if (is_high_prio) {
 		list_add_tail(&req->queuelist, &nvmeq->high_prio_list);
 		if (dev->qos_enabled)
              printk_ratelimited(KERN_INFO "TRACE: [1] Arrived Tag %d -> HIGH Prio List\n", req->tag);
-	else
+	} else {
 		list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
 		if (dev->qos_enabled)
              printk_ratelimited(KERN_INFO "TRACE: [1] Arrived Tag %d -> NORMAL Prio List\n", req->tag);
