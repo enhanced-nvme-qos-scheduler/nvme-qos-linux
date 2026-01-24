@@ -1187,6 +1187,16 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 {
 	struct request *req = NULL;
 
+	/* --- DEBUG LOG --- */
+    if (nvmeq->dev->qos_enabled) {
+        int h_count = debug_list_count(&nvmeq->high_prio_list);
+        int n_count = debug_list_count(&nvmeq->normal_prio_list);
+        
+        printk_ratelimited(KERN_INFO "TRACE: [2] Scheduler Decision. Waiting: High=%d, Normal=%d\n", 
+                           h_count, n_count);
+    }
+    /* ---------------- */
+
 	if (nvmeq->high_credits <= 0 && nvmeq->normal_credits <= 0)
 		nvme_qos_refill_credits(nvmeq);
 
