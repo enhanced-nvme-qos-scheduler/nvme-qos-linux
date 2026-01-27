@@ -526,9 +526,9 @@ enum nvme_ns_features {
 };
 
 enum {
-    NVME_QOS_DEFAULT      = 0, /* Defer to IOPRIO / Normal */
-    NVME_QOS_FORCE_HIGH   = 1, /* Treat all traffic as High Priority */
-    NVME_QOS_FORCE_NORMAL = 2, /* Treat all traffic as Normal Priority */
+	NVME_QOS_DEFAULT      = 0, /* Defer to IOPRIO / Normal */
+	NVME_QOS_FORCE_HIGH   = 1, /* Treat all traffic as High Priority */
+	NVME_QOS_FORCE_NORMAL = 2, /* Treat all traffic as Normal Priority */
 };
 
 struct nvme_ns {
@@ -556,7 +556,7 @@ struct nvme_ns {
 	struct device		cdev_device;
 	struct nvme_fault_inject fault_inject;
 
-    unsigned int qos_policy; 
+	unsigned int qos_policy;
 };
 
 /* NVMe ns supports metadata actions by the controller (generate/strip) */
