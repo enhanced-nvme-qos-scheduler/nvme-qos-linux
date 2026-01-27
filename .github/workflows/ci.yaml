@@ -18,18 +18,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: ${{ github.event_name == 'pull_request' && github.event.pull_request.commits + 1 || 2 }}
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y perl
+      - name: Fetch base for diff
+        if: github.event_name == 'pull_request'
+        run: git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1
 
       - name: Run checkpatch on PR changes
         if: github.event_name == 'pull_request'
         run: |
           # get the diff between base and head
-          git diff ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} -- drivers/nvme/host/ > /tmp/pr.patch
+          git diff origin/${{ github.event.pull_request.base.ref }}..HEAD -- drivers/nvme/host/ > /tmp/pr.patch
 
           if [[ -s /tmp/pr.patch ]]; then
             echo "Checking changes in drivers/nvme/host/..."
@@ -49,8 +48,9 @@ jobs:
       - name: Run checkpatch on push changes
         if: github.event_name == 'push'
         run: |
-          # check the pushed commits
+          # for pushes, check the diff in the pushed commits
           if [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            git fetch origin ${{ github.event.before }} --depth=1 || true
             git diff ${{ github.event.before }}..${{ github.sha }} -- drivers/nvme/host/ > /tmp/push.patch
 
             if [[ -s /tmp/push.patch ]]; then
