@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+set -e
+
+echo ""
+echo "Running pre-commit checks..."
+
+scripts/lint.sh --fast
+
+if [[ $? -ne 0 ]]; then
+	echo ""
+	echo "Pre-commit checks failed."
+	echo "Fix the issues above or use 'git commit --no-verify' to skip."
+	exit 1
+fi
+
+echo ""
