@@ -247,47 +247,50 @@ static ssize_t nuse_show(struct device *dev, struct device_attribute *attr,
 static DEVICE_ATTR_RO(nuse);
 
 static ssize_t nvme_qos_policy_show(struct device *dev,
-                                    struct device_attribute *attr, char *buf)
+				    struct device_attribute *attr, char *buf)
 {
-    struct nvme_ns *ns = nvme_get_ns_from_dev(dev);
-    const char *policy_str;
+	struct nvme_ns *ns = nvme_get_ns_from_dev(dev);
+	const char *policy_str;
 
-    switch (ns->qos_policy) {
-    case NVME_QOS_FORCE_HIGH:   policy_str = "force_high"; break;
-    case NVME_QOS_FORCE_NORMAL: policy_str = "force_normal"; break;
-    default:                    policy_str = "default"; break;
-    }
+	switch (ns->qos_policy) {
+	case NVME_QOS_FORCE_HIGH:
+		policy_str = "force_high";
+		break;
+	case NVME_QOS_FORCE_NORMAL:
+		policy_str = "force_normal";
+		break;
+	default:
+		policy_str = "default";
+		break;
+	}
 
-    return sysfs_emit(buf, "%s\n", policy_str);
+	return sysfs_emit(buf, "%s\n", policy_str);
 }
 
 static ssize_t nvme_qos_policy_store(struct device *dev,
-                                     struct device_attribute *attr,
-                                     const char *buf, size_t count)
+				     struct device_attribute *attr,
+				     const char *buf, size_t count)
 {
-    struct nvme_ns *ns = nvme_get_ns_from_dev(dev);
-    int ret = count;
+	struct nvme_ns *ns = nvme_get_ns_from_dev(dev);
+	int ret = count;
 	unsigned int new_policy;
 
-    if (sysfs_streq(buf, "force_high")) {
-        new_policy = NVME_QOS_FORCE_HIGH;
-        dev_info(dev, "NVMe QoS: Policy set to FORCE HIGH\n");
-    }
-    else if (sysfs_streq(buf, "force_normal")) {
-        new_policy = NVME_QOS_FORCE_NORMAL;
-        dev_info(dev, "NVMe QoS: Policy set to FORCE NORMAL\n");
-    }
-    else if (sysfs_streq(buf, "default")) {
-        new_policy = NVME_QOS_DEFAULT;
-        dev_info(dev, "NVMe QoS: Policy set to DEFAULT\n");
-    }
-    else {
-        return -EINVAL;
-    }
-	
+	if (sysfs_streq(buf, "force_high")) {
+		new_policy = NVME_QOS_FORCE_HIGH;
+		dev_info(dev, "NVMe QoS: Policy set to FORCE HIGH\n");
+	} else if (sysfs_streq(buf, "force_normal")) {
+		new_policy = NVME_QOS_FORCE_NORMAL;
+		dev_info(dev, "NVMe QoS: Policy set to FORCE NORMAL\n");
+	} else if (sysfs_streq(buf, "default")) {
+		new_policy = NVME_QOS_DEFAULT;
+		dev_info(dev, "NVMe QoS: Policy set to DEFAULT\n");
+	} else {
+		return -EINVAL;
+	}
+
 	WRITE_ONCE(ns->qos_policy, new_policy);
 
-    return ret;
+	return ret;
 }
 static DEVICE_ATTR(qos_policy, S_IRUGO | S_IWUSR, nvme_qos_policy_show, nvme_qos_policy_store);
 
@@ -300,7 +303,7 @@ static struct attribute *nvme_ns_attrs[] = {
 	&dev_attr_nsid.attr,
 	&dev_attr_metadata_bytes.attr,
 	&dev_attr_nuse.attr,
-    &dev_attr_qos_policy.attr,
+	&dev_attr_qos_policy.attr,
 #ifdef CONFIG_NVME_MULTIPATH
 	&dev_attr_ana_grpid.attr,
 	&dev_attr_ana_state.attr,
