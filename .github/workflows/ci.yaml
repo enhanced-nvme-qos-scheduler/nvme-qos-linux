@@ -28,7 +28,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           # get the diff between base and head
-          git diff origin/${{ github.event.pull_request.base.ref }}..HEAD -- drivers/nvme/host/ > /tmp/pr.patch
+          git diff FETCH_HEAD..HEAD -- drivers/nvme/host/ > /tmp/pr.patch
 
           if [[ -s /tmp/pr.patch ]]; then
             echo "Checking changes in drivers/nvme/host/..."

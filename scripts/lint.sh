@@ -97,7 +97,7 @@ if [[ $FAST -eq 1 ]]; then
 		run_checkpatch "checkpatch (staged)" "$PATCH"
 	fi
 
-	run_check "check_merge_conflicts" "! echo \"$STAGED_FILES\" | xargs grep -n -E '^(<{7}|>{7}|={7})'"
+	run_check "check_merge_conflicts" "! echo \"$STAGED_FILES\" | xargs -r grep -n -E '^(<{7}|>{7}|={7})'"
 else
 	echo "Checking changes vs master branch (errors only)..."
 	echo ""
