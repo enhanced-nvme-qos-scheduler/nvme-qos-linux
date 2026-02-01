@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-# nvmebuild - NVMe QoS Development Kernel Build Script
+# nvme-qos-build.sh - NVMe QoS Development Kernel Build Script
 #
 # A comprehensive build management tool for the NVMe QoS scheduler project.
 # Features self-managed configuration, smart module reloading, ccache integration,
 # and detailed system diagnostics.
 #
-# Usage: nvmebuild <command> [options]
-#        nvmebuild help <subcommand>
+# Usage: nvme-qos-build <command> [options]
+#        nvme-qos-build help <subcommand>
 #
 # Commands:
 #   init      Configure build environment (first-time setup)
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 VERSION="0.0.1"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nvmebuild"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nvme-qos-build"
 CONFIG_FILE="$CONFIG_DIR/config"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -132,7 +132,7 @@ load_config() {
 save_config() {
     mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_FILE" << EOF
-# nvmebuild configuration
+# nvme-qos-build configuration
 # Created: $(date '+%Y-%m-%d %H:%M:%S')
 
 KBUILD_DIR="$KBUILD_DIR"
@@ -204,9 +204,9 @@ cmd_init() {
     success "Configuration complete!"
     echo ""
     echo "Next steps:"
-    echo "  1. Run './scripts/nvmebuild.sh status' to check system state"
-    echo "  2. Run './scripts/nvmebuild.sh config qos enable' to enable QoS"
-    echo "  3. Run './scripts/nvmebuild.sh build' to build the kernel"
+    echo "  1. Run './scripts/nvme-qos-build.sh status' to check system state"
+    echo "  2. Run './scripts/nvme-qos-build.sh config qos enable' to enable QoS"
+    echo "  3. Run './scripts/nvme-qos-build.sh build' to build the kernel"
 }
 
 get_job_count() {
@@ -450,7 +450,7 @@ cmd_config() {
 
             if [[ ! -f "$config_file" ]]; then
                 warn "No .config found at $config_file"
-                echo "Run 'nvmebuild build' to create initial config"
+                echo "Run 'nvme-qos-build build' to create initial config"
                 return
             fi
 
@@ -491,8 +491,8 @@ cmd_config() {
                     echo "CONFIG_NVME_QOS status: $qos_status"
                     echo ""
                     echo "Commands:"
-                    echo "  ./scripts/nvmebuild.sh config qos enable   - Enable QoS"
-                    echo "  ./scripts/nvmebuild.sh config qos disable  - Disable QoS"
+                    echo "  ./scripts/nvme-qos-build.sh config qos enable   - Enable QoS"
+                    echo "  ./scripts/nvme-qos-build.sh config qos disable  - Disable QoS"
                     ;;
                 enable)
                     enable_qos_config
@@ -948,8 +948,8 @@ do_build_full() {
     else
         echo ""
         echo "Next steps:"
-        echo "  ./scripts/nvmebuild.sh install    - Install kernel"
-        echo "  ./scripts/nvmebuild.sh reload     - Reload NVMe module (if module build)"
+        echo "  ./scripts/nvme-qos-build.sh install    - Install kernel"
+        echo "  ./scripts/nvme-qos-build.sh reload     - Reload NVMe module (if module build)"
     fi
 }
 
@@ -962,7 +962,7 @@ do_build_module() {
 Current kernel: $running
 Expected: *-nvme-dev*
 
-Run './scripts/nvmebuild.sh boot set' then reboot, or use 'build' for full build."
+Run './scripts/nvme-qos-build.sh boot set' then reboot, or use 'build' for full build."
     fi
 
     # Check prerequisites (subset)
@@ -1010,7 +1010,7 @@ Run './scripts/nvmebuild.sh boot set' then reboot, or use 'build' for full build
     success "Module installed"
     echo ""
     echo "Next steps:"
-    echo "  ./scripts/nvmebuild.sh reload    - Reload NVMe module"
+    echo "  ./scripts/nvme-qos-build.sh reload    - Reload NVMe module"
     echo ""
     warn "Reloading will briefly disconnect NVMe devices!"
 }
@@ -1020,7 +1020,7 @@ do_install() {
     built_kernel=$(get_built_kernel)
 
     if [[ "$built_kernel" == "not_built" ]]; then
-        die "No kernel built. Run './scripts/nvmebuild.sh build' first."
+        die "No kernel built. Run './scripts/nvme-qos-build.sh build' first."
     fi
 
     header "Installing Kernel"
@@ -1064,7 +1064,7 @@ cmd_build() {
             do_build_module "$@"
             ;;
         --help|-h)
-            echo "Usage: nvmebuild build [subcommand] [options]"
+            echo "Usage: nvme-qos-build build [subcommand] [options]"
             echo ""
             echo "Subcommands:"
             echo "  full       Full kernel build (default)"
@@ -1436,7 +1436,7 @@ cmd_boot() {
             boot_remove_kernels
             ;;
         --help|-h)
-            echo "Usage: nvmebuild boot <subcommand>"
+            echo "Usage: nvme-qos-build boot <subcommand>"
             echo ""
             echo "Subcommands:"
             echo "  status         Show current GRUB configuration (default)"
@@ -1487,7 +1487,7 @@ cmd_clean() {
             success "Build directory completely cleaned"
             ;;
         --help|-h)
-            echo "Usage: nvmebuild clean [what]"
+            echo "Usage: nvme-qos-build clean [what]"
             echo ""
             echo "What to clean:"
             echo "  all       Clean build artifacts (default)"
@@ -1505,9 +1505,9 @@ cmd_help() {
 
     if [[ -z "$topic" ]]; then
         cat << 'EOF'
-nvmebuild - NVMe QoS Development Kernel Build Script
+nvme-qos-build - NVMe QoS Development Kernel Build Script
 
-Usage: nvmebuild <command> [options]
+Usage: nvme-qos-build <command> [options]
 
 Commands:
   init       Configure build environment (first-time setup)
@@ -1523,23 +1523,23 @@ Commands:
 Common workflows:
 
   First time setup:
-    ./scripts/nvmebuild.sh init
-    ./scripts/nvmebuild.sh config qos enable
-    ./scripts/nvmebuild.sh build --install
+    ./scripts/nvme-qos-build.sh init
+    ./scripts/nvme-qos-build.sh config qos enable
+    ./scripts/nvme-qos-build.sh build --install
 
   Iterative development (after booting dev kernel):
-    ./scripts/nvmebuild.sh build module
-    ./scripts/nvmebuild.sh reload
+    ./scripts/nvme-qos-build.sh build module
+    ./scripts/nvme-qos-build.sh reload
 
   Check system state:
-    ./scripts/nvmebuild.sh status
+    ./scripts/nvme-qos-build.sh status
 
 Global options:
   -v, --verbose    Verbose output
   -q, --quiet      Minimal output
   -y, --yes        Auto-confirm prompts
 
-Run 'nvmebuild help <command>' for command-specific help.
+Run 'nvme-qos-build help <command>' for command-specific help.
 EOF
         return
     fi
@@ -1555,7 +1555,7 @@ EOF
             cmd_clean --help
             ;;
         config)
-            echo "Usage: nvmebuild config <subcommand>"
+            echo "Usage: nvme-qos-build config <subcommand>"
             echo ""
             echo "Subcommands:"
             echo "  show      Show current kernel config status (default)"
@@ -1565,9 +1565,9 @@ EOF
             echo "  restore   Restore .config from backup"
             echo ""
             echo "Examples:"
-            echo "  nvmebuild config qos enable   Enable QoS in kernel config"
-            echo "  nvmebuild config qos disable  Disable QoS in kernel config"
-            echo "  nvmebuild config menu         Open interactive menuconfig"
+            echo "  nvme-qos-build config qos enable   Enable QoS in kernel config"
+            echo "  nvme-qos-build config qos disable  Disable QoS in kernel config"
+            echo "  nvme-qos-build config menu         Open interactive menuconfig"
             ;;
         *)
             die "No help available for: $topic"
@@ -1576,8 +1576,8 @@ EOF
 }
 
 show_usage() {
-    echo "Usage: nvmebuild <command> [options]"
-    echo "Run 'nvmebuild help' for more information."
+    echo "Usage: nvme-qos-build <command> [options]"
+    echo "Run 'nvme-qos-build help' for more information."
 }
 
 main() {
@@ -1608,7 +1608,7 @@ main() {
                 shift
                 ;;
             -*)
-                die "Unknown option: $1. Run 'nvmebuild help' for usage."
+                die "Unknown option: $1. Run 'nvme-qos-build help' for usage."
                 ;;
             *)
                 break
@@ -1658,7 +1658,7 @@ main() {
             cmd_help "$@"
             ;;
         *)
-            die "Unknown command: $cmd. Run 'nvmebuild help' for usage."
+            die "Unknown command: $cmd. Run 'nvme-qos-build help' for usage."
             ;;
     esac
 }
