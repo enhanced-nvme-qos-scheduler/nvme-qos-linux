@@ -4134,7 +4134,9 @@ static void nvme_alloc_ns(struct nvme_ctrl *ctrl, struct nvme_ns_info *info)
 	ns->ctrl = ctrl;
 	kref_init(&ns->kref);
 
-	ns->qos_policy = NVME_QOS_DEFAULT; 
+#ifdef CONFIG_NVME_QOS
+	ns->qos_policy = NVME_QOS_DEFAULT;
+#endif
 
 	if (nvme_init_ns_head(ns, info))
 		goto out_cleanup_disk;

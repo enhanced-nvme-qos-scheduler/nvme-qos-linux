@@ -192,8 +192,10 @@ struct nvme_dev {
 	unsigned int nr_write_queues;
 	unsigned int nr_poll_queues;
 
+#ifdef CONFIG_NVME_QOS
 	unsigned int qos_enabled;
 	unsigned int qos_high_weight;
+#endif
 
 	struct nvme_descriptor_pools descriptor_pools[];
 };
@@ -252,10 +254,12 @@ struct nvme_queue {
 	__le32 *dbbuf_sq_ei;
 	__le32 *dbbuf_cq_ei;
 	struct completion delete_done;
+#ifdef CONFIG_NVME_QOS
 	struct list_head high_prio_list;
 	struct list_head normal_prio_list;
 	int high_credits;
 	int normal_credits;
+#endif
 };
 
 /* bits for iod->flags */
@@ -1177,6 +1181,7 @@ out_free_cmd:
 	return ret;
 }
 
+#ifdef CONFIG_NVME_QOS
 static void nvme_qos_refill_credits(struct nvme_queue *nvmeq)
 {
 	nvmeq->high_credits = nvmeq->dev->qos_high_weight;
@@ -1221,7 +1226,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 
 	return NULL;
 }
-
+#endif /* CONFIG_NVME_QOS */
 
 static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 			 const struct blk_mq_queue_data *bd)
@@ -1230,10 +1235,12 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	struct nvme_dev *dev = nvmeq->dev;
 	struct request *req = bd->rq;
 	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
-	struct nvme_ns *ns = req->q->queuedata;
 	blk_status_t ret;
+#ifdef CONFIG_NVME_QOS
+	struct nvme_ns *ns = req->q->queuedata;
 	bool is_high_prio = false;
 	unsigned short prio;
+#endif
 
 	if (unlikely(!test_bit(NVMEQ_ENABLED, &nvmeq->flags)))
 		return BLK_STS_IOERR;
@@ -1245,6 +1252,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (unlikely(ret))
 		return ret;
 
+#ifdef CONFIG_NVME_QOS
 	/* Bypass QoS if disabled */
 	if (unlikely(dev->qos_enabled == 0)) {
 		spin_lock(&nvmeq->sq_lock);
@@ -1294,6 +1302,12 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	nvme_write_sq_db(nvmeq, true);
 	spin_unlock(&nvmeq->sq_lock);
+#else
+	spin_lock(&nvmeq->sq_lock);
+	nvme_sq_copy_cmd(nvmeq, &iod->cmd);
+	nvme_write_sq_db(nvmeq, true);
+	spin_unlock(&nvmeq->sq_lock);
+#endif /* CONFIG_NVME_QOS */
 
 	return BLK_STS_OK;
 }
@@ -1981,10 +1995,12 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 	spin_lock_init(&nvmeq->sq_lock);
 	spin_lock_init(&nvmeq->cq_poll_lock);
 
+#ifdef CONFIG_NVME_QOS
 	INIT_LIST_HEAD(&nvmeq->high_prio_list);
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
 	nvmeq->high_credits = 9;
 	nvmeq->normal_credits = 1;
+#endif
 
 	nvmeq->cq_head = 0;
 	nvmeq->cq_phase = 1;
@@ -2640,6 +2656,7 @@ static ssize_t hmb_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RW(hmb);
 
+#ifdef CONFIG_NVME_QOS
 static ssize_t qos_enable_show(struct device *dev, struct device_attribute *attr,
 			       char *buf)
 {
@@ -2688,6 +2705,7 @@ static ssize_t qos_weight_store(struct device *dev, struct device_attribute *att
 	return count;
 }
 static DEVICE_ATTR_RW(qos_weight);
+#endif /* CONFIG_NVME_QOS */
 
 static umode_t nvme_pci_attrs_are_visible(struct kobject *kobj,
 		struct attribute *a, int n)
@@ -2713,8 +2731,10 @@ static struct attribute *nvme_pci_attrs[] = {
 	&dev_attr_cmbloc.attr,
 	&dev_attr_cmbsz.attr,
 	&dev_attr_hmb.attr,
+#ifdef CONFIG_NVME_QOS
 	&dev_attr_qos_enable.attr,
 	&dev_attr_qos_weight.attr,
+#endif
 	NULL,
 };
 
@@ -3569,8 +3589,10 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 	dev->ctrl.max_segments = NVME_MAX_SEGS;
 	dev->ctrl.max_integrity_segments = 1;
 
+#ifdef CONFIG_NVME_QOS
 	dev->qos_enabled = 0;
 	dev->qos_high_weight = 9;
+#endif
 
 	return dev;
 
