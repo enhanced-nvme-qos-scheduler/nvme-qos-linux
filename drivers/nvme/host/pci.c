@@ -192,9 +192,9 @@ struct nvme_dev {
 	unsigned int nr_write_queues;
 	unsigned int nr_poll_queues;
 
-    unsigned int qos_enabled;
-    unsigned int qos_high_weight;
-	
+	unsigned int qos_enabled;
+	unsigned int qos_high_weight;
+
 	struct nvme_descriptor_pools descriptor_pools[];
 };
 
@@ -252,10 +252,10 @@ struct nvme_queue {
 	__le32 *dbbuf_sq_ei;
 	__le32 *dbbuf_cq_ei;
 	struct completion delete_done;
-    struct list_head high_prio_list;
-    struct list_head normal_prio_list;
-    int high_credits;
-    int normal_credits; 
+	struct list_head high_prio_list;
+	struct list_head normal_prio_list;
+	int high_credits;
+	int normal_credits;
 };
 
 /* bits for iod->flags */
@@ -1179,48 +1179,47 @@ out_free_cmd:
 
 static void nvme_qos_refill_credits(struct nvme_queue *nvmeq)
 {
-    nvmeq->high_credits = nvmeq->dev->qos_high_weight;
-    nvmeq->normal_credits = 1;
+	nvmeq->high_credits = nvmeq->dev->qos_high_weight;
+	nvmeq->normal_credits = 1;
 }
 
 static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 {
-    struct request *req = NULL;
+	struct request *req = NULL;
 
-    if (nvmeq->high_credits <= 0 && nvmeq->normal_credits <= 0) {
-        nvme_qos_refill_credits(nvmeq);
-    }
+	if (nvmeq->high_credits <= 0 && nvmeq->normal_credits <= 0)
+		nvme_qos_refill_credits(nvmeq);
 
 	/* Service High Priority */
-    if (nvmeq->high_credits > 0 && !list_empty(&nvmeq->high_prio_list)) {
-        req = list_first_entry(&nvmeq->high_prio_list, struct request, queuelist);
-        list_del_init(&req->queuelist);
-        nvmeq->high_credits--;
-        return req;
-    }
+	if (nvmeq->high_credits > 0 && !list_empty(&nvmeq->high_prio_list)) {
+		req = list_first_entry(&nvmeq->high_prio_list, struct request, queuelist);
+		list_del_init(&req->queuelist);
+		nvmeq->high_credits--;
+		return req;
+	}
 
 	/* Service Normal Priority */
-    if (nvmeq->normal_credits > 0 && !list_empty(&nvmeq->normal_prio_list)) {
-        req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
-        list_del_init(&req->queuelist); 
-        nvmeq->normal_credits--;
-        return req;
-    }
+	if (nvmeq->normal_credits > 0 && !list_empty(&nvmeq->normal_prio_list)) {
+		req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
+		list_del_init(&req->queuelist);
+		nvmeq->normal_credits--;
+		return req;
+	}
 
-    /* Work Conserving: Strict Priority Fallback */
-    if (!list_empty(&nvmeq->high_prio_list)) {
-        req = list_first_entry(&nvmeq->high_prio_list, struct request, queuelist);
-        list_del_init(&req->queuelist);
-        return req;
-    }
-    
-    if (!list_empty(&nvmeq->normal_prio_list)) {
-        req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
-        list_del_init(&req->queuelist);
-        return req;
-    }
+	/* Work Conserving: Strict Priority Fallback */
+	if (!list_empty(&nvmeq->high_prio_list)) {
+		req = list_first_entry(&nvmeq->high_prio_list, struct request, queuelist);
+		list_del_init(&req->queuelist);
+		return req;
+	}
 
-    return NULL;
+	if (!list_empty(&nvmeq->normal_prio_list)) {
+		req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
+		list_del_init(&req->queuelist);
+		return req;
+	}
+
+	return NULL;
 }
 
 
@@ -1245,26 +1244,25 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	ret = nvme_prep_rq(req);
 	if (unlikely(ret))
 		return ret;
-	
-	
+
 	/* Bypass QoS if disabled */
-    if (unlikely(dev->qos_enabled == 0)) {
+	if (unlikely(dev->qos_enabled == 0)) {
 		spin_lock(&nvmeq->sq_lock);
-        nvme_sq_copy_cmd(nvmeq, &iod->cmd);
-        nvme_write_sq_db(nvmeq, true);
-        spin_unlock(&nvmeq->sq_lock);
-        return BLK_STS_OK;
-    }
-	
+		nvme_sq_copy_cmd(nvmeq, &iod->cmd);
+		nvme_write_sq_db(nvmeq, true);
+		spin_unlock(&nvmeq->sq_lock);
+		return BLK_STS_OK;
+	}
+
 	spin_lock(&nvmeq->sq_lock);
-	
-    /* Classification */
+
+	/* Classification */
 	prio = req->bio ? req->bio->bi_ioprio : IOPRIO_CLASS_BE;
 
 	unsigned int current_policy = 0;
-	if(ns){
+
+	if (ns)
 		current_policy = READ_ONCE(ns->qos_policy);
-	}
 
 	if (current_policy == NVME_QOS_FORCE_HIGH) {
 		is_high_prio = true;
@@ -1280,24 +1278,24 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	else
 		list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
 
-    /* Dispatch Loop */
-    while (true) {
-        struct request *next_req;
-        struct nvme_iod *next_iod;
-        
-        next_req = nvme_qos_dequeue_wrr(nvmeq);
-        if (!next_req) 
-            break; 
+	/* Dispatch Loop */
+	while (true) {
+		struct request *next_req;
+		struct nvme_iod *next_iod;
 
-        next_iod = blk_mq_rq_to_pdu(next_req);
+		next_req = nvme_qos_dequeue_wrr(nvmeq);
+		if (!next_req)
+			break;
 
-        nvme_sq_copy_cmd(nvmeq, &next_iod->cmd);
-    }
+		next_iod = blk_mq_rq_to_pdu(next_req);
 
-    nvme_write_sq_db(nvmeq, true);
-    spin_unlock(&nvmeq->sq_lock);
-    
-    return BLK_STS_OK;
+		nvme_sq_copy_cmd(nvmeq, &next_iod->cmd);
+	}
+
+	nvme_write_sq_db(nvmeq, true);
+	spin_unlock(&nvmeq->sq_lock);
+
+	return BLK_STS_OK;
 }
 
 static void nvme_submit_cmds(struct nvme_queue *nvmeq, struct rq_list *rqlist)
@@ -1983,12 +1981,10 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 	spin_lock_init(&nvmeq->sq_lock);
 	spin_lock_init(&nvmeq->cq_poll_lock);
 
-	
-    INIT_LIST_HEAD(&nvmeq->high_prio_list);
-    INIT_LIST_HEAD(&nvmeq->normal_prio_list);
-    nvmeq->high_credits = 9;
-    nvmeq->normal_credits = 1;
-    
+	INIT_LIST_HEAD(&nvmeq->high_prio_list);
+	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
+	nvmeq->high_credits = 9;
+	nvmeq->normal_credits = 1;
 
 	nvmeq->cq_head = 0;
 	nvmeq->cq_phase = 1;
@@ -2645,49 +2641,51 @@ static ssize_t hmb_store(struct device *dev, struct device_attribute *attr,
 static DEVICE_ATTR_RW(hmb);
 
 static ssize_t qos_enable_show(struct device *dev, struct device_attribute *attr,
-                               char *buf)
+			       char *buf)
 {
-    struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
-    return sysfs_emit(buf, "%d\n", ndev->qos_enabled);
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%d\n", ndev->qos_enabled);
 }
 
 static ssize_t qos_enable_store(struct device *dev, struct device_attribute *attr,
-                                const char *buf, size_t count)
+				const char *buf, size_t count)
 {
-    struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
-    bool enable;
-    
-    if (kstrtobool(buf, &enable) < 0)
-        return -EINVAL;
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	bool enable;
 
-    ndev->qos_enabled = enable;
-    dev_info(dev, "NVMe QoS Scheduler: %s\n", enable ? "ENABLED" : "DISABLED");
-    return count;
+	if (kstrtobool(buf, &enable) < 0)
+		return -EINVAL;
+
+	ndev->qos_enabled = enable;
+	dev_info(dev, "NVMe QoS Scheduler: %s\n", enable ? "ENABLED" : "DISABLED");
+	return count;
 }
 static DEVICE_ATTR_RW(qos_enable);
 
 static ssize_t qos_weight_show(struct device *dev, struct device_attribute *attr,
-                               char *buf)
+			       char *buf)
 {
-    struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
-    return sysfs_emit(buf, "%u\n", ndev->qos_high_weight);
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%u\n", ndev->qos_high_weight);
 }
 
 static ssize_t qos_weight_store(struct device *dev, struct device_attribute *attr,
-                                const char *buf, size_t count)
+				const char *buf, size_t count)
 {
-    struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
-    unsigned int val;
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	unsigned int val;
 
-    if (kstrtouint(buf, 10, &val) < 0)
-        return -EINVAL;
+	if (kstrtouint(buf, 10, &val) < 0)
+		return -EINVAL;
 
-    if (val == 0)
-        val = 1;
+	if (val == 0)
+		val = 1;
 
-    ndev->qos_high_weight = val;
-    dev_info(dev, "NVMe QoS: High Priority Weight set to %u\n", val);
-    return count;
+	ndev->qos_high_weight = val;
+	dev_info(dev, "NVMe QoS: High Priority Weight set to %u\n", val);
+	return count;
 }
 static DEVICE_ATTR_RW(qos_weight);
 
@@ -2715,8 +2713,8 @@ static struct attribute *nvme_pci_attrs[] = {
 	&dev_attr_cmbloc.attr,
 	&dev_attr_cmbsz.attr,
 	&dev_attr_hmb.attr,
-    &dev_attr_qos_enable.attr,
-    &dev_attr_qos_weight.attr,
+	&dev_attr_qos_enable.attr,
+	&dev_attr_qos_weight.attr,
 	NULL,
 };
 
@@ -3571,8 +3569,8 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 	dev->ctrl.max_segments = NVME_MAX_SEGS;
 	dev->ctrl.max_integrity_segments = 1;
 
-    dev->qos_enabled = 0;
-    dev->qos_high_weight = 9;
+	dev->qos_enabled = 0;
+	dev->qos_high_weight = 9;
 
 	return dev;
 
