@@ -67,7 +67,9 @@ die() {
 }
 
 debug() {
-    [[ "$VERBOSE" -eq 1 ]] && echo -e "${CYAN}[DEBUG]${NC} $*"
+    if [[ "$VERBOSE" -eq 1 ]]; then
+        echo -e "${CYAN}[DEBUG]${NC} $*"
+    fi
 }
 
 header() {
@@ -1026,6 +1028,9 @@ do_install() {
     header "Installing Kernel"
     info "Kernel version: $built_kernel"
 
+    # Ensure GRUB is configured for safe boot fallback
+    ensure_grub_safe_boot
+
     # Install modules
     info "Installing modules..."
     sudo make -C "$SRC_DIR" O="$KBUILD_DIR" modules_install
@@ -1291,6 +1296,131 @@ Module reload not possible. Reboot required."
     echo ""
 }
 
+check_grub_safe_boot() {
+    local grub_file="/etc/default/grub"
+    GRUB_ISSUES=()
+
+    if [[ ! -f "$grub_file" ]]; then
+        GRUB_ISSUES+=("GRUB config file not found: $grub_file")
+        return 1
+    fi
+
+    # Check GRUB_DEFAULT=saved (required for grub-reboot to work)
+    if ! grep -q '^GRUB_DEFAULT=saved' "$grub_file"; then
+        local current_default
+        current_default=$(grep '^GRUB_DEFAULT=' "$grub_file" 2>/dev/null | cut -d= -f2 || echo "not set")
+        GRUB_ISSUES+=("GRUB_DEFAULT should be 'saved' (currently: $current_default)")
+    fi
+
+    # Check GRUB_SAVEDEFAULT is not true (would auto-save each boot as default)
+    if grep -q '^GRUB_SAVEDEFAULT=true' "$grub_file"; then
+        GRUB_ISSUES+=("GRUB_SAVEDEFAULT should be 'false' or unset (prevents auto-fallback)")
+    fi
+
+    # Check GRUB_TIMEOUT_STYLE is not hidden (need to see menu for recovery)
+    if grep -q '^GRUB_TIMEOUT_STYLE=hidden' "$grub_file"; then
+        GRUB_ISSUES+=("GRUB_TIMEOUT_STYLE should be 'menu' (not hidden)")
+    fi
+
+    # Check GRUB_TIMEOUT is at least 1 second
+    local timeout
+    timeout=$(grep '^GRUB_TIMEOUT=' "$grub_file" 2>/dev/null | cut -d= -f2 || echo "")
+    if [[ -n "$timeout" ]] && [[ "$timeout" -eq 0 ]]; then
+        GRUB_ISSUES+=("GRUB_TIMEOUT should be at least 1 (currently: 0)")
+    fi
+
+    if [[ ${#GRUB_ISSUES[@]} -gt 0 ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+setup_grub_safe_boot() {
+    local grub_file="/etc/default/grub"
+    local timestamp
+    timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_file="/etc/default/grub.backup.$timestamp"
+
+    info "Backing up GRUB config to $backup_file"
+    sudo cp "$grub_file" "$backup_file"
+
+    info "Configuring GRUB for safe boot fallback..."
+
+    # Update GRUB_DEFAULT to 'saved'
+    if grep -q '^GRUB_DEFAULT=' "$grub_file"; then
+        sudo sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' "$grub_file"
+    else
+        echo 'GRUB_DEFAULT=saved' | sudo tee -a "$grub_file" >/dev/null
+    fi
+
+    # Remove or set GRUB_SAVEDEFAULT=false
+    if grep -q '^GRUB_SAVEDEFAULT=' "$grub_file"; then
+        sudo sed -i 's/^GRUB_SAVEDEFAULT=.*/GRUB_SAVEDEFAULT=false/' "$grub_file"
+    fi
+
+    # Update GRUB_TIMEOUT_STYLE to 'menu'
+    if grep -q '^GRUB_TIMEOUT_STYLE=' "$grub_file"; then
+        sudo sed -i 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' "$grub_file"
+    else
+        echo 'GRUB_TIMEOUT_STYLE=menu' | sudo tee -a "$grub_file" >/dev/null
+    fi
+
+    # Ensure GRUB_TIMEOUT is at least 1
+    local timeout
+    timeout=$(grep '^GRUB_TIMEOUT=' "$grub_file" 2>/dev/null | cut -d= -f2 || echo "")
+    if [[ -z "$timeout" ]] || [[ "$timeout" -eq 0 ]]; then
+        if grep -q '^GRUB_TIMEOUT=' "$grub_file"; then
+            sudo sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=1/' "$grub_file"
+        else
+            echo 'GRUB_TIMEOUT=1' | sudo tee -a "$grub_file" >/dev/null
+        fi
+    fi
+
+    info "Updating GRUB configuration..."
+    sudo update-grub
+
+    info "Setting generic kernel (entry 0) as the saved default..."
+    sudo grub-set-default 0
+
+    success "GRUB configured for safe boot fallback"
+    echo ""
+    echo "How it works:"
+    echo "  - grub-reboot sets a ONE-TIME boot target"
+    echo "  - If that kernel crashes/hangs, next reboot uses the saved default"
+    echo "  - The saved default is your generic kernel (entry 0)"
+}
+
+ensure_grub_safe_boot() {
+    if check_grub_safe_boot; then
+        debug "GRUB is already configured correctly, nothing to do"
+        return 0
+    fi
+
+    echo ""
+    warn "GRUB is not configured for safe boot fallback!"
+    echo ""
+    echo "Issues found:"
+    for issue in "${GRUB_ISSUES[@]}"; do
+        echo "  - $issue"
+    done
+    echo ""
+    echo "Without safe boot configuration, if the dev kernel fails to boot,"
+    echo "your system may repeatedly try to boot the broken kernel."
+    echo ""
+    echo "With safe boot configuration:"
+    echo "  - grub-reboot sets a ONE-TIME boot target"
+    echo "  - If the kernel crashes/hangs, next reboot uses the generic kernel"
+    echo ""
+
+    if confirm "Configure GRUB for safe boot fallback now?" "y"; then
+        setup_grub_safe_boot
+    else
+        warn "Proceeding without safe boot configuration"
+        warn "If the dev kernel fails, you may need to manually select the generic kernel from GRUB menu"
+    fi
+}
+
 boot_status() {
     header "GRUB Boot Configuration"
 
@@ -1420,6 +1550,45 @@ cmd_boot() {
         status)
             boot_status
             ;;
+        check)
+            header "GRUB Safe Boot Check"
+            echo ""
+            if check_grub_safe_boot; then
+                success "GRUB is configured for safe boot fallback"
+                echo ""
+                echo "Current settings ensure:"
+                echo "  - grub-reboot sets a ONE-TIME boot target"
+                echo "  - If the kernel crashes/hangs, next reboot uses the generic kernel"
+            else
+                warn "GRUB is NOT configured for safe boot fallback"
+                echo ""
+                echo "Issues found:"
+                for issue in "${GRUB_ISSUES[@]}"; do
+                    echo "  - $issue"
+                done
+                echo ""
+                echo "Run './scripts/nvme-qos-build.sh boot setup' to fix"
+            fi
+            ;;
+        setup)
+            header "GRUB Safe Boot Setup"
+            echo ""
+            if check_grub_safe_boot; then
+                info "GRUB is already configured for safe boot fallback"
+                if ! confirm "Reconfigure anyway?"; then
+                    return 0
+                fi
+            else
+                echo "Current issues:"
+                for issue in "${GRUB_ISSUES[@]}"; do
+                    echo "  - $issue"
+                done
+                echo ""
+            fi
+            if confirm "Configure GRUB for safe boot fallback?" "y"; then
+                setup_grub_safe_boot
+            fi
+            ;;
         set)
             boot_set_onetime "$@"
             ;;
@@ -1440,11 +1609,16 @@ cmd_boot() {
             echo ""
             echo "Subcommands:"
             echo "  status         Show current GRUB configuration (default)"
+            echo "  check          Check if GRUB is configured for safe boot fallback"
+            echo "  setup          Configure GRUB for safe boot fallback"
             echo "  set [kernel]   Set one-time boot to dev kernel"
             echo "  default [kernel]  Set default boot to dev kernel"
             echo "  reset          Clear one-time boot (preserves default)"
             echo "  clear-default  Reset default to first menu entry"
             echo "  remove         Remove dev kernels from system"
+            echo ""
+            echo "Safe boot fallback ensures that if your dev kernel fails to boot,"
+            echo "the system automatically falls back to the generic kernel on next reboot."
             ;;
         *)
             die "Unknown boot subcommand: $subcmd"
