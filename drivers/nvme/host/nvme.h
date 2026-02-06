@@ -525,11 +525,13 @@ enum nvme_ns_features {
 	NVME_NS_DEAC = 1 << 2,		/* DEAC bit in Write Zeroes supported */
 };
 
+#ifdef CONFIG_NVME_QOS
 enum {
 	NVME_QOS_DEFAULT      = 0, /* Defer to IOPRIO / Normal */
 	NVME_QOS_FORCE_HIGH   = 1, /* Treat all traffic as High Priority */
 	NVME_QOS_FORCE_NORMAL = 2, /* Treat all traffic as Normal Priority */
 };
+#endif
 
 struct nvme_ns {
 	struct list_head list;
@@ -556,7 +558,9 @@ struct nvme_ns {
 	struct device		cdev_device;
 	struct nvme_fault_inject fault_inject;
 
+#ifdef CONFIG_NVME_QOS
 	unsigned int qos_policy;
+#endif
 };
 
 /* NVMe ns supports metadata actions by the controller (generate/strip) */
