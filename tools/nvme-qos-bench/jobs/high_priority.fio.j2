@@ -1,0 +1,19 @@
+; High-priority workload: 4K random reads
+; Simulates latency-sensitive I/O (foreground tasks, small queries)
+; Uses IOPRIO_CLASS_RT (class 1) for high priority
+[global]
+ioengine=libaio
+direct=1
+time_based=1
+runtime={{ runtime }}
+ramp_time={{ ramp_time }}
+group_reporting=1
+
+[high-prio-reads]
+filename={{ device }}
+rw=randread
+bs=4k
+iodepth={{ iodepth }}
+numjobs={{ numjobs }}
+prio=0
+prioclass=1
