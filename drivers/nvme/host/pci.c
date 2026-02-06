@@ -1178,6 +1178,64 @@ out_free_cmd:
 	return ret;
 }
 
+/*
+ * Drain pending QoS requests to hardware.
+ * Called with sq_lock held.
+ */
+static int nvme_qos_drain_queue_locked(struct nvme_queue *nvmeq)
+{
+	struct request *req;
+	struct nvme_iod *iod;
+	int submitted = 0;
+
+	while (!list_empty(&nvmeq->high_prio_list)) {
+		req = list_first_entry(&nvmeq->high_prio_list,
+				       struct request, queuelist);
+		list_del_init(&req->queuelist);
+		iod = blk_mq_rq_to_pdu(req);
+		nvme_sq_copy_cmd(nvmeq, &iod->cmd);
+		submitted++;
+	}
+
+	while (!list_empty(&nvmeq->normal_prio_list)) {
+		req = list_first_entry(&nvmeq->normal_prio_list,
+				       struct request, queuelist);
+		list_del_init(&req->queuelist);
+		iod = blk_mq_rq_to_pdu(req);
+		nvme_sq_copy_cmd(nvmeq, &iod->cmd);
+		submitted++;
+	}
+
+	return submitted;
+}
+
+/*
+ * Drain all pending QoS requests from all I/O queues.
+ * Called when QoS is disabled at runtime.
+ */
+static void nvme_qos_drain_all_queues(struct nvme_dev *dev)
+{
+	unsigned int i;
+	int total = 0;
+
+	/* Skip admin queue (qid 0), drain I/O queues (1 to online_queues) */
+	for (i = 1; i <= dev->online_queues; i++) {
+		struct nvme_queue *nvmeq = &dev->queues[i];
+		int drained;
+
+		spin_lock(&nvmeq->sq_lock);
+		drained = nvme_qos_drain_queue_locked(nvmeq);
+		if (drained > 0)
+			nvme_write_sq_db(nvmeq, true);
+		spin_unlock(&nvmeq->sq_lock);
+		total += drained;
+	}
+
+	if (total > 0)
+		dev_info(dev->dev, "NVMe QoS: drained %d pending requests\n",
+			 total);
+}
+
 #define NVME_QOS_MAX_BATCH 4
 
 static void nvme_qos_refill_credits(struct nvme_queue *nvmeq)
@@ -1312,6 +1370,14 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	}
 
 	spin_lock(&nvmeq->sq_lock);
+
+	/* Re-check QoS flag under lock to handle disable race */
+	if (unlikely(!READ_ONCE(dev->qos_enabled))) {
+		nvme_sq_copy_cmd(nvmeq, &iod->cmd);
+		nvme_write_sq_db(nvmeq, true);
+		spin_unlock(&nvmeq->sq_lock);
+		return BLK_STS_OK;
+	}
 
 	/* Classification */
 	prio = req->bio ? req->bio->bi_ioprio : IOPRIO_CLASS_BE;
@@ -2734,7 +2800,17 @@ static ssize_t qos_enable_store(struct device *dev, struct device_attribute *att
 	if (kstrtobool(buf, &enable) < 0)
 		return -EINVAL;
 
-	ndev->qos_enabled = enable;
+	/* When disabling QoS, drain pending requests first */
+	if (!enable && ndev->qos_enabled) {
+		// Set flag first to prevent new enqueues and
+		// ensure flag visible before drain
+		WRITE_ONCE(ndev->qos_enabled, 0);
+		smp_mb();
+		nvme_qos_drain_all_queues(ndev);
+	} else {
+		WRITE_ONCE(ndev->qos_enabled, enable);
+	}
+
 	dev_info(dev, "NVMe QoS Scheduler: %s\n", enable ? "ENABLED" : "DISABLED");
 	return count;
 }
