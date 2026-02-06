@@ -1364,8 +1364,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 		spin_lock(&nvmeq->sq_lock);
 		nvme_sq_copy_cmd(nvmeq, &iod->cmd);
 		atomic_inc(&nvmeq->in_flight);
-		if (nvmeq->qid == 0)
-			nvme_write_sq_db(nvmeq, true);
+		nvme_write_sq_db(nvmeq, bd->last);
 		spin_unlock(&nvmeq->sq_lock);
 		return BLK_STS_OK;
 	}
@@ -1375,7 +1374,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	/* Re-check QoS flag under lock to handle disable race */
 	if (unlikely(!READ_ONCE(dev->qos_enabled))) {
 		nvme_sq_copy_cmd(nvmeq, &iod->cmd);
-		nvme_write_sq_db(nvmeq, true);
+		nvme_write_sq_db(nvmeq, bd->last);
 		spin_unlock(&nvmeq->sq_lock);
 		return BLK_STS_OK;
 	}
@@ -1425,8 +1424,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 			submitted++;
 		}
 
-		if (nvmeq->qid == 0)
-			nvme_write_sq_db(nvmeq, true);
+		nvme_write_sq_db(nvmeq, bd->last);
 	}
 	spin_unlock(&nvmeq->sq_lock);
 
