@@ -1439,7 +1439,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 #else
 	spin_lock(&nvmeq->sq_lock);
 	nvme_sq_copy_cmd(nvmeq, &iod->cmd);
-	nvme_write_sq_db(nvmeq, true);
+	nvme_write_sq_db(nvmeq, bd->last);
 	spin_unlock(&nvmeq->sq_lock);
 #endif /* CONFIG_NVME_QOS */
 
