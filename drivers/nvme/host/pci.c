@@ -2847,7 +2847,6 @@ static ssize_t qos_batch_limit_show(struct device *dev,
 				     struct device_attribute *attr, char *buf)
 {
 	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
-
 	return sysfs_emit(buf, "%u\n", ndev->qos_batch_limit);
 }
 
@@ -2860,7 +2859,6 @@ static ssize_t qos_batch_limit_store(struct device *dev,
 
 	if (kstrtouint(buf, 10, &val) < 0)
 		return -EINVAL;
-
 	if (val < 1 || val > 32)
 		return -EINVAL;
 
