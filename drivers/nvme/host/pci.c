@@ -1336,7 +1336,6 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 
 	return NULL;
 }
-
 /*
  * nvme_qos_dispatch - Submit pending QoS requests via WRR scheduling
  * @nvmeq: The NVMe queue to dispatch from
