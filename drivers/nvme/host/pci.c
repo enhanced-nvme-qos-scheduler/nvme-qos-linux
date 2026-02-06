@@ -194,6 +194,7 @@ struct nvme_dev {
 
 	unsigned int qos_enabled;
 	unsigned int qos_high_weight;
+	unsigned int qos_batch_limit;
 
 	struct nvme_descriptor_pools descriptor_pools[];
 };
@@ -1313,7 +1314,7 @@ static void nvme_qos_kick(struct nvme_queue *nvmeq)
 
 	spin_lock(&nvmeq->sq_lock);
 
-	while (submitted < NVME_QOS_MAX_BATCH) {
+	while (submitted < dev->qos_batch_limit) {
 		unsigned int in_flight = atomic_read(&nvmeq->in_flight);
 		struct request *req;
 		struct nvme_iod *iod;
@@ -1401,12 +1402,12 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	else
 		list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
 
-	/* Dispatch loop - submit up to NVME_QOS_MAX_BATCH requests */
+	/* Dispatch loop - submit up to qos_batch_limit requests */
 	{
 		unsigned int depth = nvmeq->q_depth - 1;
 		unsigned int submitted = 0;
 
-		while (submitted < NVME_QOS_MAX_BATCH) {
+		while (submitted < dev->qos_batch_limit) {
 			unsigned int in_flight = atomic_read(&nvmeq->in_flight);
 			struct request *next_req;
 			struct nvme_iod *next_iod;
@@ -2842,6 +2843,33 @@ static ssize_t qos_weight_store(struct device *dev, struct device_attribute *att
 }
 static DEVICE_ATTR_RW(qos_weight);
 
+static ssize_t qos_batch_limit_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%u\n", ndev->qos_batch_limit);
+}
+
+static ssize_t qos_batch_limit_store(struct device *dev,
+				      struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	unsigned int val;
+
+	if (kstrtouint(buf, 10, &val) < 0)
+		return -EINVAL;
+
+	if (val < 1 || val > 32)
+		return -EINVAL;
+
+	ndev->qos_batch_limit = val;
+	dev_info(dev, "NVMe QoS: Batch Limit set to %u\n", val);
+	return count;
+}
+static DEVICE_ATTR_RW(qos_batch_limit);
+
 static umode_t nvme_pci_attrs_are_visible(struct kobject *kobj,
 		struct attribute *a, int n)
 {
@@ -2868,6 +2896,7 @@ static struct attribute *nvme_pci_attrs[] = {
 	&dev_attr_hmb.attr,
 	&dev_attr_qos_enable.attr,
 	&dev_attr_qos_weight.attr,
+	&dev_attr_qos_batch_limit.attr,
 	NULL,
 };
 
@@ -3724,6 +3753,7 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 
 	dev->qos_enabled = 0;
 	dev->qos_high_weight = 9;
+	dev->qos_batch_limit = NVME_QOS_MAX_BATCH;
 
 	return dev;
 
