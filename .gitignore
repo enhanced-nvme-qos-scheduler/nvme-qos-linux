@@ -186,3 +186,9 @@ sphinx_*/
 /rust-project.json
 *.iso
 *.img
+
+# QEMU-related
+image/
+build.log
+vm.log
+run.sh
