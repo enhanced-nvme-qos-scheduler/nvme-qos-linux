@@ -1200,6 +1200,7 @@ static int nvme_qos_drain_queue_locked(struct nvme_queue *nvmeq)
 		list_del_init(&req->queuelist);
 		iod = blk_mq_rq_to_pdu(req);
 		nvme_sq_copy_cmd(nvmeq, &iod->cmd);
+		atomic_inc(&nvmeq->in_flight);
 		submitted++;
 	}
 
@@ -1209,6 +1210,7 @@ static int nvme_qos_drain_queue_locked(struct nvme_queue *nvmeq)
 		list_del_init(&req->queuelist);
 		iod = blk_mq_rq_to_pdu(req);
 		nvme_sq_copy_cmd(nvmeq, &iod->cmd);
+		atomic_inc(&nvmeq->in_flight);
 		submitted++;
 	}
 
@@ -1383,6 +1385,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	/* Re-check QoS flag under lock to handle disable race */
 	if (unlikely(!READ_ONCE(dev->qos_enabled))) {
 		nvme_sq_copy_cmd(nvmeq, &iod->cmd);
+		atomic_inc(&nvmeq->in_flight);
 		nvme_write_sq_db(nvmeq, true);
 		spin_unlock(&nvmeq->sq_lock);
 		return BLK_STS_OK;
