@@ -1347,10 +1347,11 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
  *
  * Must be called with sq_lock held.
  */
-static void nvme_qos_dispatch(struct nvme_queue *nvmeq)
+static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit_now)
 {
 	unsigned int depth = nvmeq->q_depth - 1;
 	unsigned int submitted = 0;
+	bool high_prio_submitted = false;
 
 	while (submitted < NVME_QOS_MAX_BATCH) {
 		unsigned int in_flight = atomic_read(&nvmeq->in_flight);
@@ -1364,12 +1365,15 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq)
 		if (!req)
 			break;
 
+		if (nvme_qos_is_high_prio(req))
+			high_prio_submitted = true;
+
 		iod = blk_mq_rq_to_pdu(req);
 		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
 		submitted++;
 	}
 
-	if (submitted)
+	if (submitted && (commit_now || high_prio_submitted))
 		nvme_write_sq_db(nvmeq, true);
 }
 
@@ -1396,7 +1400,7 @@ static void nvme_qos_kick(struct nvme_queue *nvmeq)
 		return;
 
 	spin_lock_irqsave(&nvmeq->sq_lock, flags);
-	nvme_qos_dispatch(nvmeq);
+	nvme_qos_dispatch(nvmeq, true);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 }
 #endif /* CONFIG_NVME_QOS */
@@ -1428,7 +1432,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (unlikely(dev->qos_enabled == 0)) {
 		spin_lock_irqsave(&nvmeq->sq_lock, flags);
 		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
-		nvme_write_sq_db(nvmeq, true);
+		nvme_write_sq_db(nvmeq, bd->last);
 		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 		return BLK_STS_OK;
 	}
@@ -1438,7 +1442,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	/* Re-check QoS flag under lock to handle disable race */
 	if (unlikely(!READ_ONCE(dev->qos_enabled))) {
 		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
-		nvme_write_sq_db(nvmeq, true);
+		nvme_write_sq_db(nvmeq, bd->last);
 		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 		return BLK_STS_OK;
 	}
@@ -1449,12 +1453,12 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	else
 		list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
 
-	nvme_qos_dispatch(nvmeq);
+	nvme_qos_dispatch(nvmeq, bd->last);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 #else
 	spin_lock(&nvmeq->sq_lock);
 	nvme_sq_copy_cmd(nvmeq, &iod->cmd);
-	nvme_write_sq_db(nvmeq, true);
+	nvme_write_sq_db(nvmeq, bd->last);
 	spin_unlock(&nvmeq->sq_lock);
 #endif /* CONFIG_NVME_QOS */
 
@@ -1532,7 +1536,7 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 			list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
 	}
 
-	nvme_qos_dispatch(nvmeq);
+	nvme_qos_dispatch(nvmeq, true);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 }
 #endif /* CONFIG_NVME_QOS */
