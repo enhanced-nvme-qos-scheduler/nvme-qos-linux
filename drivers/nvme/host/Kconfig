@@ -14,6 +14,19 @@ config BLK_DEV_NVME
 	  To compile this driver as a module, choose M here: the
 	  module will be called nvme.
 
+config NVME_QOS
+	bool "NVMe QoS priority scheduling"
+	depends on BLK_DEV_NVME
+	help
+	  This option enables a lightweight per-queue QoS scheduler in the
+	  NVMe PCIe driver. The scheduler prioritizes latency-sensitive I/O
+	  over bulk traffic using weighted round-robin.
+
+	  QoS is disabled by default and enabled via sysfs:
+	    echo 1 > /sys/class/nvme/nvme0/qos_enable
+
+	  If unsure, say N.
+
 config NVME_MULTIPATH
 	bool "NVMe multipath support"
 	depends on NVME_CORE
