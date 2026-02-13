@@ -1188,41 +1188,40 @@ static void nvme_qos_refill_credits(struct nvme_queue *nvmeq)
 static struct nvme_iod *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 {
 	struct nvme_iod *iod = NULL;
-	struct list_head *prio_list;
 
 	if (nvmeq->high_credits <= 0 && nvmeq->normal_credits <= 0)
 		nvme_qos_refill_credits(nvmeq);
 
 	/* Service High Priority */
 	if (nvmeq->high_credits > 0 && !list_empty(&nvmeq->high_prio_list)) {
-		prio_list = &nvmeq->high_prio_list;
+        iod = list_first_entry(&nvmeq->high_prio_list, struct nvme_iod, qos_node);
+        list_del_init(&iod->qos_node);
 		nvmeq->high_credits--;
+        return iod;
 	}
 
 	/* Service Normal Priority */
 	else if (nvmeq->normal_credits > 0 && !list_empty(&nvmeq->normal_prio_list)) {
-		prio_list = &nvmeq->normal_prio_list;
+        iod = list_first_entry(&nvmeq->normal_prio_list, struct nvme_iod, qos_node);
+        list_del_init(&iod->qos_node);
 		nvmeq->normal_credits--;
+        return iod;
 	}
 
 	/* Work Conserving: Strict Priority Fallback */
 	else if (!list_empty(&nvmeq->high_prio_list)) {
-		prio_list = &nvmeq->high_prio_list;
+        iod = list_first_entry(&nvmeq->high_prio_list, struct nvme_iod, qos_node);
+        list_del_init(&iod->qos_node);
+        return iod;
 	}
 
 	else if (!list_empty(&nvmeq->normal_prio_list)) {
-		prio_list = &nvmeq->normal_prio_list;
+        iod = list_first_entry(&nvmeq->normal_prio_list, struct nvme_iod, qos_node);
+        list_del_init(&iod->qos_node);
+        return iod;
 	}
 
-	/* Empty Priority Lists */
-	else {
-		return NULL;
-	}
-
-
-	iod = list_first_entry(prio_list, struct nvme_iod, qos_node);
-	list_del_init(&iod->qos_node);
-	return iod;
+	return NULL;
 }
 
 
@@ -1247,6 +1246,12 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	ret = nvme_prep_rq(req);
 	if (unlikely(ret))
 		return ret;
+
+	/* 
+     * Make sure the qos_node is initialized before adding it to the prio list.
+     * Do this before bypass so that nvme_pci_complete_rq works everytime
+     */
+	INIT_LIST_HEAD(&iod->qos_node);
 
 	/* Bypass QoS if disabled */
 	if (unlikely(dev->qos_enabled == 0)) {
@@ -1276,8 +1281,6 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	}
 
 	/* Enqueue */
-	/* Make sure the qos_node is initialized before adding it to the prio list */
-	INIT_LIST_HEAD(&iod->qos_node);
 	if (is_high_prio)
 		list_add_tail(&iod->qos_node, &nvmeq->high_prio_list);
 	else
@@ -1364,19 +1367,12 @@ static __always_inline void nvme_pci_unmap_rq(struct request *req)
 
 static void nvme_pci_complete_rq(struct request *req)
 {
-	nvme_pci_unmap_rq(req);
-	nvme_complete_rq(req);
-
 	/* Make sure the qos_node is unlinked in the event of a cancel/timeout/etc. */
 	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
-	/* 
-	 * AS OF RIGHT NOW: 
-	 *   QoS Nodes have only 1 element. Thus if it isn't empty, it isn't initialized.
-	 *   This is a protection in place for when the system boots.
-	 */
-    if(!list_empty(&iod->qos_node))
-		return;
 	list_del_init(&iod->qos_node);
+
+	nvme_pci_unmap_rq(req);
+	nvme_complete_rq(req);
 }
 
 static void nvme_pci_complete_batch(struct io_comp_batch *iob)
