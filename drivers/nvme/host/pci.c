@@ -257,8 +257,8 @@ struct nvme_queue {
 #ifdef CONFIG_NVME_QOS
 	struct list_head high_prio_list;
 	struct list_head normal_prio_list;
-	int high_credits;
-	int normal_credits;
+	s64 high_tokens;
+	unsigned long last_refill_jiffies;
 	atomic_t in_flight;
 #endif
 };
@@ -1288,48 +1288,49 @@ static bool nvme_qos_is_high_prio(struct request *req)
 	return IOPRIO_PRIO_CLASS(prio) == IOPRIO_CLASS_RT;
 }
 
-static void nvme_qos_refill_credits(struct nvme_queue *nvmeq)
+static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 {
-	nvmeq->high_credits = nvmeq->dev->qos_high_weight;
-	nvmeq->normal_credits = 1;
+	unsigned long now = jiffies;
+	unsigned long delta = now - nvmeq->last_refill_jiffies;
+	unsigned int rate = nvmeq->dev->qos_high_weight;
+	unsigned int cap = rate;
+
+	if(delta && nvmeq->high_tokens < cap){
+		s64 new_tokens = (s64)delta * rate;
+
+		nvmeq -> high_tokens += new_tokens;
+
+		if (nvmeq->high_tokens > cap)
+			nvmeq->high_tokens = cap;
+
+		nvmeq->last_refill_jiffies = now;
+	}
 }
 
 static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 {
 	struct request *req = NULL;
+	bool high_pending = !list_empty(&nvmeq->high_prio_list);
+	bool normal_pending = !list_empty(&nvmeq->normal_prio_list);
 
-	if (nvmeq->high_credits <= 0 && nvmeq->normal_credits <= 0)
-		nvme_qos_refill_credits(nvmeq);
+	nvme_qos_update_tokens(nvmeq);
 
-	/* Service High Priority */
-	if (nvmeq->high_credits > 0 && !list_empty(&nvmeq->high_prio_list)) {
-		req = list_first_entry(&nvmeq->high_prio_list,
-				       struct request, queuelist);
-		list_del_init(&req->queuelist);
-		nvmeq->high_credits--;
-		return req;
-	}
-
-	/* Service Normal Priority */
-	if (nvmeq->normal_credits > 0 && !list_empty(&nvmeq->normal_prio_list)) {
-		req = list_first_entry(&nvmeq->normal_prio_list,
-				       struct request, queuelist);
-		list_del_init(&req->queuelist);
-		nvmeq->normal_credits--;
-		return req;
-	}
-
-	/* Work Conserving: Strict Priority Fallback */
-	if (!list_empty(&nvmeq->high_prio_list)) {
-		req = list_first_entry(&nvmeq->high_prio_list,
-				       struct request, queuelist);
+	if (high_pending && normal_pending && nvmeq->high_tokens <= 0) {
+		req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
 		list_del_init(&req->queuelist);
 		return req;
 	}
 
-	if (!list_empty(&nvmeq->normal_prio_list)) {
-		req = list_first_entry(&nvmeq->normal_prio_list,
-				       struct request, queuelist);
+	if (high_pending) {
+		if (nvmeq->high_tokens > 0 || !normal_pending) {
+			req = list_first_entry(&nvmeq->high_prio_list, struct request, queuelist);
+			list_del_init(&req->queuelist);
+		}
+		return req;
+	}
+
+	if (normal_pending) {
+		req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
 		list_del_init(&req->queuelist);
 		return req;
 	}
@@ -2251,8 +2252,8 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 #ifdef CONFIG_NVME_QOS
 	INIT_LIST_HEAD(&nvmeq->high_prio_list);
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
-	nvmeq->high_credits = 9;
-	nvmeq->normal_credits = 1;
+	nvmeq->high_tokens = dev->qos_high_weight;
+	nvmeq->last_refill_jiffies = jiffies;
 	atomic_set(&nvmeq->in_flight, 0);
 #endif
 
@@ -2307,8 +2308,8 @@ static void nvme_init_queue(struct nvme_queue *nvmeq, u16 qid)
 	 */
 	INIT_LIST_HEAD(&nvmeq->high_prio_list);
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
-	nvmeq->high_credits = dev->qos_high_weight;
-	nvmeq->normal_credits = 1;
+	nvmeq->high_tokens = dev->qos_high_weight;
+	nvmeq->last_refill_jiffies = jiffies;
 	atomic_set(&nvmeq->in_flight, 0);
 #endif
 
