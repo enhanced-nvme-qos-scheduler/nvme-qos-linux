@@ -1201,7 +1201,7 @@ static struct nvme_iod *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 	}
 
 	/* Service Normal Priority */
-	else if (nvmeq->normal_credits > 0 && !list_empty(&nvmeq->normal_prio_list)) {
+	if (nvmeq->normal_credits > 0 && !list_empty(&nvmeq->normal_prio_list)) {
         iod = list_first_entry(&nvmeq->normal_prio_list, struct nvme_iod, qos_node);
         list_del_init(&iod->qos_node);
 		nvmeq->normal_credits--;
@@ -1209,13 +1209,13 @@ static struct nvme_iod *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 	}
 
 	/* Work Conserving: Strict Priority Fallback */
-	else if (!list_empty(&nvmeq->high_prio_list)) {
+	if (!list_empty(&nvmeq->high_prio_list)) {
         iod = list_first_entry(&nvmeq->high_prio_list, struct nvme_iod, qos_node);
         list_del_init(&iod->qos_node);
         return iod;
 	}
 
-	else if (!list_empty(&nvmeq->normal_prio_list)) {
+	if (!list_empty(&nvmeq->normal_prio_list)) {
         iod = list_first_entry(&nvmeq->normal_prio_list, struct nvme_iod, qos_node);
         list_del_init(&iod->qos_node);
         return iod;
