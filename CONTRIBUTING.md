@@ -53,6 +53,28 @@ make O=~/kbuild/nvme-dev M=drivers/nvme/host
 make O=~/kbuild/nvme-dev -j$(nproc)
 ```
 
+### LSP Support (clangd)
+
+After building, generate a `compile_commands.json` for clangd or other
+LSP-based editors:
+
+```bash
+python3 scripts/clang-tools/gen_compile_commands.py
+```
+
+This creates `compile_commands.json` in the current directory. Most editors
+(VS Code, Neovim, Emacs) will pick it up automatically for jump-to-definition,
+diagnostics, and autocompletion. Assuming they have `clangd` language server support.
+
+Additionally add the following to your `.clangd` configuration file to ensure
+that all QoS code is always enabled and parsed correctly:
+
+```yaml
+CompileFlags:
+  Add:
+    - -DCONFIG_NVME_QOS=1
+```
+
 ## Running CI, Linters, and Formatters Locally
 
 ### Linting (checkpatch.pl)
