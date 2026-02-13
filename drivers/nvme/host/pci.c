@@ -1295,10 +1295,10 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 	unsigned int rate = nvmeq->dev->qos_high_weight;
 	unsigned int cap = rate;
 
-	if(delta && nvmeq->high_tokens < cap){
+	if (delta && nvmeq->high_tokens < cap) {
 		s64 new_tokens = (s64)delta * rate;
 
-		nvmeq -> high_tokens += new_tokens;
+		nvmeq->high_tokens += new_tokens;
 
 		if (nvmeq->high_tokens > cap)
 			nvmeq->high_tokens = cap;
