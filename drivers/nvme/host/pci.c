@@ -3000,7 +3000,7 @@ static ssize_t qos_batch_limit_store(struct device *dev,
 
 	if (kstrtouint(buf, 10, &val) < 0)
 		return -EINVAL;
-	if (val < 1 || val > 256)
+	if (val < 1)
 		return -EINVAL;
 
 	ndev->qos_batch_limit = val;
