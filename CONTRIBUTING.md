@@ -195,6 +195,79 @@ A PR is merge-ready when **all** of the following are satisfied:
 - [ ] PR description includes a Summary section explaining the changes
 - [ ] No unresolved review comments remain
 
+## CONFIG_NVME_QOS Guards
+
+All QoS code **must** be compiled conditionally behind `CONFIG_NVME_QOS`. This
+keeps the vanilla NVMe driver identical to upstream when the feature is disabled.
+The Kconfig symbol is a `bool` (not tristate) defined in
+`drivers/nvme/host/Kconfig`.
+
+### Guard patterns
+
+Every QoS addition needs a guard. The pattern depends on context:
+
+- **Struct fields, enums, type definitions** — wrap the block with
+  `#ifdef CONFIG_NVME_QOS` / `#endif`.
+- **Standalone QoS functions** — wrap the entire function definition.
+- **Initialization** — guard field init in probe, alloc, and reset paths.
+- **Sysfs attributes** — guard the show/store functions, the `DEVICE_ATTR`,
+  and the entry in the attribute array.
+- **Inline changes in shared functions** — use `#ifdef` / `#else` / `#endif`
+  so the non-QoS path stays intact. Add a trailing comment on `#endif`:
+
+```c
+#ifdef CONFIG_NVME_QOS
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
+	/* ... QoS classify, enqueue, dispatch ... */
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+#else
+	spin_lock(&nvmeq->sq_lock);
+	nvme_sq_copy_cmd(nvmeq, &iod->cmd);
+	nvme_write_sq_db(nvmeq, bd->last);
+	spin_unlock(&nvmeq->sq_lock);
+#endif /* CONFIG_NVME_QOS */
+```
+
+> **Note:** QoS paths use `spin_lock_irqsave` because `nvme_qos_kick()` runs
+> in hard-IRQ context. The `#else` branch keeps the cheaper `spin_lock` that
+> upstream uses. There are no `static inline` stubs in `nvme.h` — all QoS
+> logic lives in `pci.c`, `core.c`, and `sysfs.c` behind `#ifdef` blocks.
+
+All QoS functions must be prefixed with `nvme_qos_` (e.g. `nvme_qos_dispatch`,
+`nvme_qos_kick`). Sysfs helpers use the `qos_` prefix (e.g.
+`qos_enable_show`).
+
+### Verifying your guards
+
+A missing or misplaced guard causes build failures when `CONFIG_NVME_QOS` is
+toggled. **Always build with both configurations before pushing:**
+
+```bash
+# 1. QoS ENABLED — confirms your new code compiles
+./scripts/config --file ~/kbuild/nvme-dev/.config --enable NVME_QOS
+make O=~/kbuild/nvme-dev oldconfig
+make O=~/kbuild/nvme-dev M=drivers/nvme/host -j$(nproc)
+
+# 2. QoS DISABLED — confirms nothing leaks outside the guards
+./scripts/config --file ~/kbuild/nvme-dev/.config --disable NVME_QOS
+make O=~/kbuild/nvme-dev oldconfig
+make O=~/kbuild/nvme-dev M=drivers/nvme/host -j$(nproc)
+```
+
+Common mistakes caught by the disabled build:
+
+| Symptom | Cause |
+|---|---|
+| `'qos_enabled' undeclared` | Referenced a guarded struct field outside a guard |
+| `implicit declaration of 'nvme_qos_*'` | Called a QoS function without wrapping the call site |
+| `'NVME_QOS_DEFAULT' undeclared` | Used a guarded enum constant outside a guard |
+| `unused variable 'flags'` | Declared `flags` for `irqsave` but the guard around its usage is missing |
+
+> **Tip:** Adding `-DCONFIG_NVME_QOS=1` to `.clangd`
+> (see [LSP Support](#lsp-support-clangd)) gives your editor diagnostics for
+> the QoS path, but it will **not** catch issues in the `#else` (disabled)
+> path — the dual build above is the definitive check.
+
 ## Reporting Bugs and Requesting Changes
 
 Use [GitHub Issues](https://github.com/Enhanced-NVMe-QoS-Scheduler/nvme-qos-linux/issues)
