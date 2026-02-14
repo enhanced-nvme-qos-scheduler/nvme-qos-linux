@@ -195,6 +195,7 @@ struct nvme_dev {
 #ifdef CONFIG_NVME_QOS
 	unsigned int qos_enabled;
 	unsigned int qos_high_weight;
+	unsigned int qos_batch_limit;
 #endif
 
 	struct nvme_descriptor_pools descriptor_pools[];
@@ -1340,20 +1341,23 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 /*
  * nvme_qos_dispatch - Submit pending QoS requests via WRR scheduling
  * @nvmeq: The NVMe queue to dispatch from
+ * @commit: Whether to ring the doorbell after submitting commands.
+ *          Pass bd->last from queue_rq to batch doorbells with blk-mq,
+ *          or true from kick/submit_batch to ring immediately.
  *
- * Dequeues up to NVME_QOS_MAX_BATCH requests from the priority lists using
+ * Dequeues up to qos_batch_limit requests from the priority lists using
  * weighted round-robin and copies their commands to the SQ. Writes the SQ
- * doorbell once if any requests were submitted.
+ * doorbell once if any requests were submitted and @commit is true.
  *
  * Must be called with sq_lock held.
  */
-static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit_now)
+static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 {
 	unsigned int depth = nvmeq->q_depth - 1;
 	unsigned int submitted = 0;
 	bool high_prio_submitted = false;
 
-	while (submitted < NVME_QOS_MAX_BATCH) {
+	while (submitted < nvmeq->dev->qos_batch_limit) {
 		unsigned int in_flight = atomic_read(&nvmeq->in_flight);
 		struct request *req;
 		struct nvme_iod *iod;
@@ -1373,7 +1377,7 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit_now)
 		submitted++;
 	}
 
-	if (submitted && (commit_now || high_prio_submitted))
+	if (submitted)
 		nvme_write_sq_db(nvmeq, true);
 }
 
@@ -2986,6 +2990,31 @@ static ssize_t qos_weight_store(struct device *dev, struct device_attribute *att
 	return count;
 }
 static DEVICE_ATTR_RW(qos_weight);
+
+static ssize_t qos_batch_limit_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	return sysfs_emit(buf, "%u\n", ndev->qos_batch_limit);
+}
+
+static ssize_t qos_batch_limit_store(struct device *dev,
+				      struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	unsigned int val;
+
+	if (kstrtouint(buf, 10, &val) < 0)
+		return -EINVAL;
+	if (val < 1)
+		return -EINVAL;
+
+	ndev->qos_batch_limit = val;
+	dev_info(dev, "NVMe QoS: Batch Limit set to %u\n", val);
+	return count;
+}
+static DEVICE_ATTR_RW(qos_batch_limit);
 #endif /* CONFIG_NVME_QOS */
 
 static umode_t nvme_pci_attrs_are_visible(struct kobject *kobj,
@@ -3015,6 +3044,7 @@ static struct attribute *nvme_pci_attrs[] = {
 #ifdef CONFIG_NVME_QOS
 	&dev_attr_qos_enable.attr,
 	&dev_attr_qos_weight.attr,
+	&dev_attr_qos_batch_limit.attr,
 #endif
 	NULL,
 };
@@ -3873,6 +3903,7 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 #ifdef CONFIG_NVME_QOS
 	dev->qos_enabled = 0;
 	dev->qos_high_weight = 9;
+	dev->qos_batch_limit = NVME_QOS_MAX_BATCH;
 #endif
 
 	return dev;
