@@ -1295,7 +1295,7 @@ static void nvme_qos_refill_credits(struct nvme_queue *nvmeq)
 	nvmeq->normal_credits = 1;
 }
 
-static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
+static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_high)
 {
 	struct request *req = NULL;
 
@@ -1308,6 +1308,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
 		nvmeq->high_credits--;
+		*is_high = true;
 		return req;
 	}
 
@@ -1317,6 +1318,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
 		nvmeq->normal_credits--;
+		*is_high = false;
 		return req;
 	}
 
@@ -1325,6 +1327,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 		req = list_first_entry(&nvmeq->high_prio_list,
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
+		*is_high = true;
 		return req;
 	}
 
@@ -1332,6 +1335,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 		req = list_first_entry(&nvmeq->normal_prio_list,
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
+		*is_high = false;
 		return req;
 	}
 
@@ -1361,15 +1365,16 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 		unsigned int in_flight = atomic_read(&nvmeq->in_flight);
 		struct request *req;
 		struct nvme_iod *iod;
+		bool is_high_prio = false;
 
 		if (in_flight >= depth)
 			break;
 
-		req = nvme_qos_dequeue_wrr(nvmeq);
+		req = nvme_qos_dequeue_wrr(nvmeq, &is_high_prio);
 		if (!req)
 			break;
 
-		if (nvme_qos_is_high_prio(req))
+		if (is_high_prio)
 			high_prio_submitted = true;
 
 		iod = blk_mq_rq_to_pdu(req);
@@ -1378,7 +1383,7 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 	}
 
 	if (submitted)
-		nvme_write_sq_db(nvmeq, true);
+		nvme_write_sq_db(nvmeq, commit || high_prio_submitted);
 }
 
 /*
