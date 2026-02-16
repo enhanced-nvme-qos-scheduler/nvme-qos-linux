@@ -3142,6 +3142,9 @@ static ssize_t qos_bypass_enter_threshold_store(struct device *dev,
 	if (kstrtouint(buf, 10, &val) < 0)
 		return -EINVAL;
 
+	if (val >= READ_ONCE(ndev->qos_bypass_exit_threshold))
+		return -EINVAL;
+
 	WRITE_ONCE(ndev->qos_bypass_enter_threshold, val);
 	return count;
 }
@@ -3166,8 +3169,8 @@ static ssize_t qos_bypass_exit_threshold_store(struct device *dev,
 	if (kstrtouint(buf, 10, &val) < 0)
 		return -EINVAL;
 
-	if (val < 1)
-		val = 1;
+	if (val < 1 || val <= READ_ONCE(ndev->qos_bypass_enter_threshold))
+		return -EINVAL;
 
 	WRITE_ONCE(ndev->qos_bypass_exit_threshold, val);
 	return count;
