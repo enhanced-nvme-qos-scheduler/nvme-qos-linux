@@ -196,6 +196,7 @@ struct nvme_dev {
 	unsigned int qos_enabled;
 	unsigned int qos_high_weight;
 	unsigned int qos_batch_limit;
+	unsigned int qos_burst_cap;
 #endif
 
 	struct nvme_descriptor_pools descriptor_pools[];
@@ -1303,7 +1304,7 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 	unsigned long now = jiffies;
 	unsigned long delta = now - nvmeq->last_refill_jiffies;
 	unsigned int rate = nvmeq->dev->qos_high_weight;
-	unsigned int cap = rate;
+	unsigned int cap = nvmeq->dev->qos_burst_cap;
 
 	if (!delta)
 		return;
@@ -3044,6 +3045,31 @@ static ssize_t qos_batch_limit_store(struct device *dev,
 	return count;
 }
 static DEVICE_ATTR_RW(qos_batch_limit);
+
+static ssize_t qos_burst_cap_show(struct device *dev, struct device_attribute *attr,
+			       char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	return sysfs_emit(buf, "%u\n", ndev->qos_burst_cap);
+}
+
+static ssize_t qos_burst_cap_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	unsigned int val;
+
+	if (kstrtouint(buf, 10, &val) < 0)
+		return -EINVAL;
+
+	if (val == 0)
+		return -EINVAL;
+
+	ndev->qos_burst_cap = val;
+	dev_info(dev, "NVMe QoS: Burst Capacity set to %u\n", val);
+	return count;
+}
+static DEVICE_ATTR_RW(qos_burst_cap);
 #endif /* CONFIG_NVME_QOS */
 
 static umode_t nvme_pci_attrs_are_visible(struct kobject *kobj,
@@ -3074,6 +3100,7 @@ static struct attribute *nvme_pci_attrs[] = {
 	&dev_attr_qos_enable.attr,
 	&dev_attr_qos_weight.attr,
 	&dev_attr_qos_batch_limit.attr,
+	&dev_attr_qos_burst_cap.attr,
 #endif
 	NULL,
 };
@@ -3933,6 +3960,7 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 	dev->qos_enabled = 0;
 	dev->qos_high_weight = 9;
 	dev->qos_batch_limit = NVME_QOS_MAX_BATCH;
+	dev->qos_burst_cap = 2000;
 #endif
 
 	return dev;
