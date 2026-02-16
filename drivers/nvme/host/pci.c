@@ -1288,6 +1288,15 @@ static bool nvme_qos_is_high_prio(struct request *req)
 	return IOPRIO_PRIO_CLASS(prio) == IOPRIO_CLASS_RT;
 }
 
+/*
+ * nvme_qos_update_tokens - Refill the High Priority token bucket based on time
+ * @nvmeq: The NVMe queue to update
+ *
+ * Calculates time delta since last refill in jiffies and adds tokens
+ * based on configured rate (qos_high_weight).
+ *
+ * Must be called with sq_lock held.
+ */
 static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 {
 	unsigned long now = jiffies;
@@ -1295,15 +1304,18 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 	unsigned int rate = nvmeq->dev->qos_high_weight;
 	unsigned int cap = rate;
 
-	if (delta && nvmeq->high_tokens < cap) {
+	if (!delta)
+		return;
+
+	nvmeq->last_refill_jiffies = now;
+
+	if (nvmeq->high_tokens < cap) {
 		s64 new_tokens = (s64)delta * rate;
 
 		nvmeq->high_tokens += new_tokens;
 
 		if (nvmeq->high_tokens > cap)
 			nvmeq->high_tokens = cap;
-
-		nvmeq->last_refill_jiffies = now;
 	}
 }
 
