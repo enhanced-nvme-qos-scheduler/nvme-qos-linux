@@ -229,7 +229,8 @@ Every QoS addition needs a guard. The pattern depends on context:
 #endif /* CONFIG_NVME_QOS */
 ```
 
-> **Note:** QoS paths use `spin_lock_irqsave` because `nvme_qos_kick()` runs
+> [!note]
+> QoS paths use `spin_lock_irqsave` because `nvme_qos_kick()` runs
 > in hard-IRQ context. The `#else` branch keeps the cheaper `spin_lock` that
 > upstream uses. There are no `static inline` stubs in `nvme.h` — all QoS
 > logic lives in `pci.c`, `core.c`, and `sysfs.c` behind `#ifdef` blocks.
