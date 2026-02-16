@@ -30,7 +30,8 @@ cd nvme-qos-linux
 ./scripts/install-hooks.sh
 ```
 
-> **Tip:** If you only need to build or make a quick fix, `--depth=1` gives the
+> [!tip]
+> If you only need to build or make a quick fix, `--depth=1` gives the
 > smallest download. Note that `git rebase` requires history back to the merge
 > base with `master`, so you may need to run `git fetch --unshallow` or
 > `git fetch --deepen=<N>` before rebasing.
@@ -263,7 +264,8 @@ Common mistakes caught by the disabled build:
 | `'NVME_QOS_DEFAULT' undeclared` | Used a guarded enum constant outside a guard |
 | `unused variable 'flags'` | Declared `flags` for `irqsave` but the guard around its usage is missing |
 
-> **Tip:** Adding `-DCONFIG_NVME_QOS=1` to `.clangd`
+> [!tip] 
+> Adding `-DCONFIG_NVME_QOS=1` to `.clangd`
 > (see [LSP Support](#lsp-support-clangd)) gives your editor diagnostics for
 > the QoS path, but it will **not** catch issues in the `#else` (disabled)
 > path — the dual build above is the definitive check.
