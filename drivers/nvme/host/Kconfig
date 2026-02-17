@@ -27,6 +27,22 @@ config NVME_QOS
 
 	  If unsure, say N.
 
+config NVME_QOS_STATS
+	bool "NVMe QoS scheduler statistics"
+	depends on NVME_QOS && DEBUG_FS
+	help
+	  This option enables per-queue statistics counters for the NVMe QoS
+	  scheduler, exposed via debugfs at /sys/kernel/debug/nvme_qos/.
+
+	  The counters track enqueue/dispatch decisions, WRR credit refills,
+	  work-conserving fallbacks, doorbell writes, and SQ throttle events.
+	  Each counter adds one atomic64_inc per decision point on the I/O
+	  hot path.
+
+	  Useful for validating scheduler fairness and debugging QoS behavior.
+
+	  If unsure, say N.
+
 config NVME_MULTIPATH
 	bool "NVMe multipath support"
 	depends on NVME_CORE

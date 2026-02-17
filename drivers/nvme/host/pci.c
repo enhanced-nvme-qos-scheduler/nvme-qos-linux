@@ -6,6 +6,7 @@
 
 #include <linux/acpi.h>
 #include <linux/async.h>
+#include <linux/debugfs.h>
 #include <linux/blkdev.h>
 #include <linux/blk-mq-dma.h>
 #include <linux/blk-integrity.h>
@@ -22,6 +23,7 @@
 #include <linux/nodemask.h>
 #include <linux/once.h>
 #include <linux/pci.h>
+#include <linux/seq_file.h>
 #include <linux/suspend.h>
 #include <linux/t10-pi.h>
 #include <linux/types.h>
@@ -195,6 +197,9 @@ struct nvme_dev {
 #ifdef CONFIG_NVME_QOS
 	unsigned int qos_enabled;
 	unsigned int qos_high_weight;
+#ifdef CONFIG_NVME_QOS_STATS
+	struct dentry *qos_debugfs_dir;
+#endif
 #endif
 
 	struct nvme_descriptor_pools descriptor_pools[];
@@ -260,7 +265,23 @@ struct nvme_queue {
 	int high_credits;
 	int normal_credits;
 	atomic_t in_flight;
-#endif
+#ifdef CONFIG_NVME_QOS_STATS
+	/* QoS per-queue statistics (atomic for lock-free reads from debugfs) */
+	struct {
+		atomic64_t high_enqueued;      /* requests classified high */
+		atomic64_t normal_enqueued;    /* requests classified normal */
+		atomic64_t high_dispatched;    /* high dequeued via WRR credits */
+		atomic64_t normal_dispatched;  /* normal dequeued via WRR credits */
+		atomic64_t wc_high_fallback;   /* work-conserving: high with 0 credits */
+		atomic64_t wc_normal_fallback; /* work-conserving: normal with 0 credits */
+		atomic64_t credit_refills;     /* WRR credit refill cycles */
+		atomic64_t kicks;              /* kick() calls that dispatched >= 1 */
+		atomic64_t kick_empty;         /* kick() calls with nothing pending */
+		atomic64_t sq_throttled;       /* dispatch stopped: in_flight >= depth */
+		atomic64_t doorbells;          /* doorbell writes from QoS paths */
+	} qos_stats;
+#endif /* CONFIG_NVME_QOS_STATS */
+#endif /* CONFIG_NVME_QOS */
 };
 
 /* bits for iod->flags */
@@ -1270,6 +1291,12 @@ static void nvme_qos_drain_all_queues(struct nvme_dev *dev)
 
 #define NVME_QOS_MAX_BATCH 4
 
+#ifdef CONFIG_NVME_QOS_STATS
+#define NQS_INC(nvmeq, field) atomic64_inc(&(nvmeq)->qos_stats.field)
+#else
+#define NQS_INC(nvmeq, field) do { } while (0)
+#endif
+
 static bool nvme_qos_is_high_prio(struct request *req)
 {
 	struct nvme_ns *ns = req->q->queuedata;
@@ -1298,8 +1325,10 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 {
 	struct request *req = NULL;
 
-	if (nvmeq->high_credits <= 0 && nvmeq->normal_credits <= 0)
+	if (nvmeq->high_credits <= 0 && nvmeq->normal_credits <= 0) {
 		nvme_qos_refill_credits(nvmeq);
+		NQS_INC(nvmeq, credit_refills);
+	}
 
 	/* Service High Priority */
 	if (nvmeq->high_credits > 0 && !list_empty(&nvmeq->high_prio_list)) {
@@ -1307,6 +1336,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
 		nvmeq->high_credits--;
+		NQS_INC(nvmeq, high_dispatched);
 		return req;
 	}
 
@@ -1316,6 +1346,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
 		nvmeq->normal_credits--;
+		NQS_INC(nvmeq, normal_dispatched);
 		return req;
 	}
 
@@ -1324,6 +1355,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 		req = list_first_entry(&nvmeq->high_prio_list,
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
+		NQS_INC(nvmeq, wc_high_fallback);
 		return req;
 	}
 
@@ -1331,6 +1363,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 		req = list_first_entry(&nvmeq->normal_prio_list,
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
+		NQS_INC(nvmeq, wc_normal_fallback);
 		return req;
 	}
 
@@ -1360,8 +1393,10 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 		struct request *req;
 		struct nvme_iod *iod;
 
-		if (in_flight >= depth)
+		if (in_flight >= depth) {
+			NQS_INC(nvmeq, sq_throttled);
 			break;
+		}
 
 		req = nvme_qos_dequeue_wrr(nvmeq);
 		if (!req)
@@ -1372,8 +1407,10 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 		submitted++;
 	}
 
-	if (submitted)
+	if (submitted) {
 		nvme_write_sq_db(nvmeq, commit);
+		NQS_INC(nvmeq, doorbells);
+	}
 }
 
 /*
@@ -1389,17 +1426,25 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 static void nvme_qos_kick(struct nvme_queue *nvmeq)
 {
 	unsigned long flags;
+	u16 old_tail;
 
 	if (!nvmeq->dev->qos_enabled)
 		return;
 
 	/* Quick check without lock - if both lists appear empty, skip */
 	if (list_empty(&nvmeq->high_prio_list) &&
-	    list_empty(&nvmeq->normal_prio_list))
+	    list_empty(&nvmeq->normal_prio_list)) {
+		NQS_INC(nvmeq, kick_empty);
 		return;
+	}
 
 	spin_lock_irqsave(&nvmeq->sq_lock, flags);
+	old_tail = nvmeq->sq_tail;
 	nvme_qos_dispatch(nvmeq, true);
+	if (nvmeq->sq_tail != old_tail)
+		NQS_INC(nvmeq, kicks);
+	else
+		NQS_INC(nvmeq, kick_empty);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 }
 #endif /* CONFIG_NVME_QOS */
@@ -1447,10 +1492,13 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	}
 
 	/* Classify and enqueue */
-	if (nvme_qos_is_high_prio(req))
+	if (nvme_qos_is_high_prio(req)) {
 		list_add_tail(&req->queuelist, &nvmeq->high_prio_list);
-	else
+		NQS_INC(nvmeq, high_enqueued);
+	} else {
 		list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
+		NQS_INC(nvmeq, normal_enqueued);
+	}
 
 	nvme_qos_dispatch(nvmeq, bd->last);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
@@ -1529,10 +1577,13 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 	}
 
 	while ((req = rq_list_pop(rqlist))) {
-		if (nvme_qos_is_high_prio(req))
+		if (nvme_qos_is_high_prio(req)) {
 			list_add_tail(&req->queuelist, &nvmeq->high_prio_list);
-		else
+			NQS_INC(nvmeq, high_enqueued);
+		} else {
 			list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
+			NQS_INC(nvmeq, normal_enqueued);
+		}
 	}
 
 	nvme_qos_dispatch(nvmeq, true);
@@ -2254,6 +2305,9 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 	nvmeq->high_credits = 9;
 	nvmeq->normal_credits = 1;
 	atomic_set(&nvmeq->in_flight, 0);
+#ifdef CONFIG_NVME_QOS_STATS
+	memset(&nvmeq->qos_stats, 0, sizeof(nvmeq->qos_stats));
+#endif
 #endif
 
 	nvmeq->cq_head = 0;
@@ -2986,6 +3040,98 @@ static ssize_t qos_weight_store(struct device *dev, struct device_attribute *att
 }
 static DEVICE_ATTR_RW(qos_weight);
 #endif /* CONFIG_NVME_QOS */
+
+#ifdef CONFIG_NVME_QOS_STATS
+/*
+ * QoS debugfs: per-queue statistics
+ * Path: /sys/kernel/debug/nvme_qos/<ctrlname>/stats
+ */
+static struct dentry *nvme_qos_debugfs_root;
+
+static int nvme_qos_stats_show(struct seq_file *m, void *v)
+{
+	struct nvme_dev *dev = m->private;
+	unsigned int i;
+
+	seq_printf(m, "%-4s %12s %12s %12s %12s %12s %12s %12s %12s %12s %12s %12s\n",
+		   "q", "hi_enq", "norm_enq", "hi_disp", "norm_disp",
+		   "wc_hi", "wc_norm", "refills", "kicks",
+		   "kick_empty", "sq_throt", "doorbells");
+
+	for (i = 1; i <= dev->max_qid; i++) {
+		struct nvme_queue *nvmeq = &dev->queues[i];
+
+		if (i >= dev->online_queues)
+			break;
+
+		seq_printf(m, "%-4u %12lld %12lld %12lld %12lld %12lld %12lld %12lld %12lld %12lld %12lld %12lld\n",
+			   i,
+			   atomic64_read(&nvmeq->qos_stats.high_enqueued),
+			   atomic64_read(&nvmeq->qos_stats.normal_enqueued),
+			   atomic64_read(&nvmeq->qos_stats.high_dispatched),
+			   atomic64_read(&nvmeq->qos_stats.normal_dispatched),
+			   atomic64_read(&nvmeq->qos_stats.wc_high_fallback),
+			   atomic64_read(&nvmeq->qos_stats.wc_normal_fallback),
+			   atomic64_read(&nvmeq->qos_stats.credit_refills),
+			   atomic64_read(&nvmeq->qos_stats.kicks),
+			   atomic64_read(&nvmeq->qos_stats.kick_empty),
+			   atomic64_read(&nvmeq->qos_stats.sq_throttled),
+			   atomic64_read(&nvmeq->qos_stats.doorbells));
+	}
+	return 0;
+}
+
+static int nvme_qos_stats_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, nvme_qos_stats_show, inode->i_private);
+}
+
+static const struct file_operations nvme_qos_stats_fops = {
+	.owner		= THIS_MODULE,
+	.open		= nvme_qos_stats_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+static ssize_t nvme_qos_stats_reset_write(struct file *file,
+					   const char __user *ubuf,
+					   size_t count, loff_t *ppos)
+{
+	struct nvme_dev *dev = file_inode(file)->i_private;
+	unsigned int i;
+
+	for (i = 1; i <= dev->max_qid; i++) {
+		struct nvme_queue *nvmeq = &dev->queues[i];
+
+		if (i >= dev->online_queues)
+			break;
+
+		memset(&nvmeq->qos_stats, 0, sizeof(nvmeq->qos_stats));
+	}
+	return count;
+}
+
+static const struct file_operations nvme_qos_stats_reset_fops = {
+	.owner		= THIS_MODULE,
+	.write		= nvme_qos_stats_reset_write,
+	.llseek		= noop_llseek,
+};
+
+static void nvme_qos_debugfs_setup(struct nvme_dev *dev)
+{
+	const char *name = dev_name(dev->ctrl.device);
+
+	if (!nvme_qos_debugfs_root)
+		return;
+
+	dev->qos_debugfs_dir = debugfs_create_dir(name, nvme_qos_debugfs_root);
+	debugfs_create_file("stats", 0444, dev->qos_debugfs_dir, dev,
+			    &nvme_qos_stats_fops);
+	debugfs_create_file("stats_reset", 0200, dev->qos_debugfs_dir, dev,
+			    &nvme_qos_stats_reset_fops);
+}
+#endif /* CONFIG_NVME_QOS_STATS */
 
 static umode_t nvme_pci_attrs_are_visible(struct kobject *kobj,
 		struct attribute *a, int n)
@@ -3964,6 +4110,10 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto out_disable;
 	}
 
+#ifdef CONFIG_NVME_QOS_STATS
+	nvme_qos_debugfs_setup(dev);
+#endif
+
 	pci_set_drvdata(pdev, dev);
 
 	nvme_start_ctrl(&dev->ctrl);
@@ -4025,6 +4175,10 @@ static void nvme_shutdown(struct pci_dev *pdev)
 static void nvme_remove(struct pci_dev *pdev)
 {
 	struct nvme_dev *dev = pci_get_drvdata(pdev);
+
+#ifdef CONFIG_NVME_QOS_STATS
+	debugfs_remove_recursive(dev->qos_debugfs_dir);
+#endif
 
 	nvme_change_ctrl_state(&dev->ctrl, NVME_CTRL_DELETING);
 	pci_set_drvdata(pdev, NULL);
@@ -4445,6 +4599,10 @@ static int __init nvme_init(void)
 	BUILD_BUG_ON(sizeof(struct nvme_delete_queue) != 64);
 	BUILD_BUG_ON(IRQ_AFFINITY_MAX_SETS < 2);
 
+#ifdef CONFIG_NVME_QOS_STATS
+	nvme_qos_debugfs_root = debugfs_create_dir("nvme_qos", NULL);
+#endif
+
 	return pci_register_driver(&nvme_driver);
 }
 
@@ -4452,6 +4610,9 @@ static void __exit nvme_exit(void)
 {
 	pci_unregister_driver(&nvme_driver);
 	flush_workqueue(nvme_wq);
+#ifdef CONFIG_NVME_QOS_STATS
+	debugfs_remove_recursive(nvme_qos_debugfs_root);
+#endif
 }
 
 MODULE_AUTHOR("Matthew Wilcox <willy@linux.intel.com>");
