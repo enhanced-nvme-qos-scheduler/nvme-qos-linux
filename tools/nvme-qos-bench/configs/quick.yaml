@@ -1,0 +1,26 @@
+# Quick benchmark config - fast sanity check
+# Runtime: ~5-10 minutes
+
+runtime: 30           # seconds per test
+ramp_time: 3          # warmup seconds
+iterations: 2         # iterations per config
+
+# Minimal parameter sweep
+depths: [16, 32]
+weights: [9]          # default weight only
+policies: [default]
+
+# Job configuration
+high_numjobs: 1
+normal_numjobs: 4
+
+# Tests to run
+run_baseline: true
+run_qos: true
+run_cpu_overhead: false
+run_isolation: false
+
+# Output
+output_json: true
+output_csv: true
+output_markdown: true

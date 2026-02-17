@@ -1,0 +1,26 @@
+# Default benchmark config - standard testing
+# Runtime: ~30-45 minutes
+
+runtime: 60           # seconds per test
+ramp_time: 5          # warmup seconds
+iterations: 5         # iterations per config
+
+# Standard parameter sweep
+depths: [16, 32, 64]
+weights: [9]          # default weight
+policies: [default]
+
+# Job configuration (20% high-prio / 80% normal-prio)
+high_numjobs: 1
+normal_numjobs: 4
+
+# Tests to run
+run_baseline: true
+run_qos: true
+run_cpu_overhead: false
+run_isolation: false
+
+# Output
+output_json: true
+output_csv: true
+output_markdown: true

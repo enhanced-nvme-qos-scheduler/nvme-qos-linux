@@ -15,27 +15,32 @@ runtime={{ runtime }}
 ramp_time={{ ramp_time }}
 ; Per-job stats for priority class comparison
 group_reporting=0
+{% if cpus_allowed %}
+cpus_allowed={{ cpus_allowed }}
+{% endif %}
 
 [high-prio-reads]
 filename={{ device }}
-rw=randread
-bs=4k
+rw={{ high_rw | default('randread') }}
+bs={{ high_bs | default('4k') }}
 ; psync is synchronous (iodepth=1), concurrency comes from numjobs
 numjobs={{ high_numjobs }}
 ; IOPRIO_CLASS_RT (class 1), highest priority within class
-prio=0
-prioclass=1
+prio={{ high_prio | default(0) }}
+prioclass={{ high_prioclass | default(1) }}
 new_group
 
 [normal-prio-writes]
 filename={{ device }}
-rw=write
-bs=1m
+rw={{ normal_rw | default('write') }}
+bs={{ normal_bs | default('1m') }}
 ; psync is synchronous (iodepth=1), concurrency comes from numjobs
 numjobs={{ normal_numjobs }}
+{% if normal_rw | default('write') in ['write', 'randwrite'] %}
 ; Offset writes to second half of device to avoid overlap
 offset=50%
 size=50%
+{% endif %}
 ; IOPRIO_CLASS_BE (class 2), middle priority
-prio=4
-prioclass=2
+prio={{ normal_prio | default(4) }}
+prioclass={{ normal_prioclass | default(2) }}
