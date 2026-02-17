@@ -8,6 +8,7 @@ NVMe QoS Benchmark - Benchmarking for the Linux NVMe QoS scheduler.
 import argparse
 import json
 import os
+import random
 import sys
 import time
 from datetime import datetime
@@ -22,7 +23,7 @@ from lib.config import (
     BenchmarkConfig, UserPreferences, load_config,
     QUICK_CONFIG, DEFAULT_CONFIG, FULL_CONFIG, STRESS_CONFIG,
 )
-from lib.conditions import get_condition, list_conditions
+from lib.conditions import get_condition, list_conditions, _parse_fio_size, DEFAULT_NORMAL_BS, DEFAULT_NORMAL_RW
 from lib.device import (
     NVMeDevice, discover_nvme_devices, validate_device, check_qos_available,
 )
@@ -175,6 +176,18 @@ def select_device(args, prefs: UserPreferences) -> Optional[str]:
     return selected.name
 
 
+def _run_drift_probe(runner: FioRunner, runtime: int = 5) -> Optional[float]:
+    """Run a short 4K randread probe and return p50 in microseconds."""
+    success, fio_data = runner.run_high_priority(
+        iodepth=1, numjobs=1, runtime=runtime, ramp_time=1, iteration=999,
+    )
+    if success and fio_data:
+        metrics = extract_fio_metrics(fio_data)
+        primary = get_primary_metrics(metrics)
+        return primary.get("p50_us")
+    return None
+
+
 def run_benchmark_suite(
     device: NVMeDevice,
     config: BenchmarkConfig,
@@ -188,6 +201,8 @@ def run_benchmark_suite(
         "qos": [],
         "all": [],
     }
+    drift_probes = []
+    weight_order = None
 
     runner = FioRunner(device.path, output_dir)
 
@@ -372,7 +387,33 @@ def run_benchmark_suite(
         if config.run_qos and device.qos_available:
             device.set_qos_enabled(True)
 
-            for weight in config.weights:
+            # Randomize weight order to avoid systematic bias
+            weights = list(config.weights)
+            if len(weights) > 1:
+                random.shuffle(weights)
+                print(f"Weight order (randomized): {weights}", file=sys.stderr)
+            weight_order = weights
+
+            # Initial drift probe
+            baseline_p50 = _run_drift_probe(runner)
+            if baseline_p50 is not None:
+                drift_probes.append({"phase": "initial", "p50_us": baseline_p50})
+
+            first_weight = True
+            for weight in weights:
+                # Drift probe between weight phases
+                if not first_weight and baseline_p50 is not None:
+                    probe_p50 = _run_drift_probe(runner)
+                    if probe_p50 is not None:
+                        drift_probes.append({"phase": f"before_w{weight}", "p50_us": probe_p50})
+                        if probe_p50 / baseline_p50 > 3.0:
+                            print(colored(
+                                f"  Drive state drift detected "
+                                f"(p50: {baseline_p50:.0f}us -> {probe_p50:.0f}us); "
+                                f"cross-weight comparisons may be invalid",
+                                "yellow"), file=sys.stderr)
+                first_weight = False
+
                 device.set_qos_weight(weight)
 
                 for depth in config.depths:
@@ -739,6 +780,12 @@ def run_benchmark_suite(
     finally:
         # Restore device state
         device.restore_state()
+
+    # Store drift probes and weight order in results metadata
+    if drift_probes:
+        results["drift_probes"] = drift_probes
+    if weight_order is not None:
+        results["weight_order"] = weight_order
 
     return results
 
@@ -1321,6 +1368,22 @@ def cmd_run(args) -> int:
               f"jobs: {config.high_numjobs}+{config.normal_numjobs} "
               f"({total / active:.1f}/q)", file=sys.stderr)
 
+        # Per-queue write bytes diagnostic
+        pqwb_parts = []
+        for d in condition_profile.depths:
+            b = condition_profile.per_queue_write_bytes(d)
+            pqwb_parts.append(f"{b / (1024**2):.1f} MB @ QD{d}")
+        if pqwb_parts:
+            pqwb_line = ", ".join(pqwb_parts)
+            print(f"  Per-queue write bytes: {pqwb_line}", file=sys.stderr)
+            max_bytes = max(condition_profile.per_queue_write_bytes(d) for d in condition_profile.depths)
+            if max_bytes > 256 * 1024**2:
+                print(colored("  WARNING: per-queue writes exceed 256 MB -- device FTL/GC will dominate", "red"),
+                      file=sys.stderr)
+            elif max_bytes > 128 * 1024**2:
+                print(colored("  WARNING: per-queue writes exceed 128 MB -- may reduce scheduler visibility", "yellow"),
+                      file=sys.stderr)
+
         # Condition A delegates to existing baseline overhead path
         if condition_profile.use_baseline_path:
             return cmd_run_baseline(device, args)
@@ -1453,6 +1516,15 @@ def cmd_run(args) -> int:
             "condition_name": condition_profile.name if condition_profile else None,
         },
     }
+    if condition_profile:
+        metadata["config"]["per_queue_write_bytes"] = {
+            str(d): condition_profile.per_queue_write_bytes(d)
+            for d in condition_profile.depths
+        }
+    if results.get("weight_order"):
+        metadata["config"]["weight_order"] = results["weight_order"]
+    if results.get("drift_probes"):
+        metadata["drift_probes"] = results["drift_probes"]
     save_json(metadata, output_dir / "metadata.json")
 
     # Aggregate results
@@ -2502,6 +2574,14 @@ def _print_condition_detail(c, hw_queues: Optional[int] = None) -> None:
         print(f"    High jobs:     {cfg.high_numjobs}")
         print(f"    Normal jobs:   {cfg.normal_numjobs}")
         print(f"    Jobs/queue:    {total / active:.1f}")
+
+        # Per-queue write bytes
+        pqwb_parts = []
+        for d in c.depths:
+            b = c.per_queue_write_bytes(d)
+            pqwb_parts.append(f"{b / (1024**2):.1f} MB @ QD{d}")
+        if pqwb_parts:
+            print(f"    Write bytes/q: {', '.join(pqwb_parts)}")
     print()
 
 

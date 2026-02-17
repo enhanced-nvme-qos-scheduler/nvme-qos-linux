@@ -37,6 +37,16 @@ class FioJobParams:
     normal_iodepth: int = 16
     normal_numjobs: int = 4
 
+    # Mixed workload overrides (passed through to templates as Jinja2 variables)
+    normal_bs: Optional[str] = None
+    normal_rw: Optional[str] = None
+    high_bs: Optional[str] = None
+    high_rw: Optional[str] = None
+    normal_prio: Optional[int] = None
+    normal_prioclass: Optional[int] = None
+    high_prio: Optional[int] = None
+    high_prioclass: Optional[int] = None
+
 
 def render_template(template_name: str, params: Dict[str, Any]) -> str:
     """Render a Jinja2 template with given parameters."""
@@ -51,7 +61,9 @@ def render_template(template_name: str, params: Dict[str, Any]) -> str:
 
 def generate_job_file(template_name: str, params: FioJobParams, output_path: Path) -> None:
     """Generate a FIO job file from template."""
-    content = render_template(template_name, params.__dict__)
+    # Filter out None values so Jinja2 template defaults (| default()) work correctly
+    content = render_template(template_name,
+                              {k: v for k, v in params.__dict__.items() if v is not None})
     with open(output_path, 'w') as f:
         f.write(content)
 

@@ -11,6 +11,19 @@ from typing import Dict, List, Optional
 
 from .config import BenchmarkConfig
 
+# Template defaults — single source of truth matching mixed_workload.fio.j2
+DEFAULT_NORMAL_BS = "1m"
+DEFAULT_NORMAL_RW = "write"
+
+
+def _parse_fio_size(s: str) -> int:
+    """Parse fio size string (e.g. '4k', '256k', '1m') to bytes."""
+    s = s.lower().strip()
+    multipliers = {'k': 1024, 'm': 1024**2, 'g': 1024**3}
+    if s[-1] in multipliers:
+        return int(float(s[:-1]) * multipliers[s[-1]])
+    return int(s)
+
 
 @dataclass
 class ConditionProfile:
@@ -43,6 +56,21 @@ class ConditionProfile:
 
     # Documentation
     pass_criteria: str = ""
+
+    def per_queue_write_bytes(self, depth: int) -> int:
+        """Compute per-queue outstanding write bytes for a given iodepth.
+
+        Returns 0 if the normal workload is read-only.
+        For buffered I/O (psync), iodepth is effectively 1.
+        """
+        wp = self.workload_params or {}
+        normal_rw = wp.get("normal_rw", DEFAULT_NORMAL_RW)
+        # Read-only normal workload -> no write pressure
+        if "read" in normal_rw and "write" not in normal_rw:
+            return 0
+        normal_bs = _parse_fio_size(wp.get("normal_bs", DEFAULT_NORMAL_BS))
+        effective_depth = 1 if self.run_buffered else depth
+        return int(self.normal_jobs_per_queue * effective_depth * normal_bs)
 
     def resolve(self, hw_queues: int) -> BenchmarkConfig:
         """Compute concrete BenchmarkConfig from scaling rules.
@@ -145,7 +173,8 @@ _register(ConditionProfile(
     high_jobs_per_queue=2.0,
     normal_jobs_per_queue=8.0,
     depths=[32, 64],
-    pass_criteria="High WRR engagement; p99 improvement for high-prio",
+    workload_params={"normal_bs": "256k"},
+    pass_criteria="WRR engagement; fairness OK; no high-prio regression",
 ))
 
 # D: Device-saturated, high contention (target operating condition)
@@ -165,12 +194,13 @@ _register(ConditionProfile(
 _register(ConditionProfile(
     id="E",
     name="SQ-full stress",
-    description="QD128 on quarter-queues -- triggers SQ throttling and kick path",
+    description="QD128 I/O-neutral on quarter-queues -- triggers SQ throttling and kick path without write pressure",
     mechanism="SQ throttle + kick",
     queue_fraction=0.25,
     high_jobs_per_queue=2.0,
     normal_jobs_per_queue=8.0,
     depths=[128],
+    workload_params={"normal_rw": "randread", "normal_bs": "4k"},
     pass_criteria="SQ throttle events; kick path active; no starvation",
 ))
 
@@ -185,6 +215,7 @@ _register(ConditionProfile(
     normal_jobs_per_queue=4.0,
     min_high=1,
     depths=[32, 64],
+    workload_params={"normal_bs": "256k"},
     pass_criteria="High-prio gets service despite being minority; no normal starvation",
 ))
 
@@ -230,6 +261,7 @@ _register(ConditionProfile(
     normal_jobs_per_queue=8.0,
     depths=[32, 64],
     weights=[1, 4, 9, 19, 99],
+    workload_params={"normal_bs": "256k"},
     pass_criteria="Dispatch ratio tracks weight proportionally",
 ))
 
@@ -244,6 +276,7 @@ _register(ConditionProfile(
     normal_jobs_per_queue=8.0,
     depths=[32, 64],
     run_buffered=True,
+    workload_params={"normal_bs": "256k"},
     pass_criteria="QoS effective on buffered path; no regression vs direct I/O",
 ))
 
@@ -258,6 +291,7 @@ _register(ConditionProfile(
     normal_jobs_per_queue=8.0,
     depths=[32, 64],
     namespace_policy="force_high",
+    workload_params={"normal_bs": "256k"},
     pass_criteria="All enqueues go to high queue; no normal starvation warnings",
 ))
 
