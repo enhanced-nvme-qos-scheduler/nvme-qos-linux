@@ -21,6 +21,7 @@ class BenchmarkConfig:
     runtime: int = 60              # seconds per test
     ramp_time: int = 5             # warmup seconds
     iterations: int = 5            # iterations per config
+    iter_cooldown: int = 0         # seconds to sleep between iterations (SLC recovery)
 
     # Queue depths to test
     depths: List[int] = field(default_factory=lambda: [16, 32, 64])

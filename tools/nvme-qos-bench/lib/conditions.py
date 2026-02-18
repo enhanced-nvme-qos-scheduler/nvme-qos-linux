@@ -47,6 +47,7 @@ class ConditionProfile:
     weights: List[int] = field(default_factory=lambda: [9])
     iterations: int = 5
     runtime: int = 60
+    iter_cooldown: int = 0         # seconds to sleep between iterations
 
     # Special flags
     use_baseline_path: bool = False          # Delegate to cmd_run_baseline
@@ -116,6 +117,7 @@ class ConditionProfile:
             run_baseline=True,
             run_qos=True,
             run_buffered=self.run_buffered,
+            iter_cooldown=self.iter_cooldown,
             condition_id=self.id,
             namespace_policy=self.namespace_policy,
             workload_params=dict(self.workload_params) if self.workload_params else None,

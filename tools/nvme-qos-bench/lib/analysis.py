@@ -3,7 +3,7 @@
 
 import math
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 # t-distribution critical values for 95% CI (two-tailed)
 # Index by degrees of freedom (n-1)
@@ -170,6 +170,35 @@ def detect_outliers_iqr(values: List[float], k: float = 1.5) -> Tuple[List[float
             indices.append(i)
 
     return outliers, indices
+
+
+def detect_degraded_iterations(iterations: List[Dict]) -> List[int]:
+    """Detect iterations degraded by SLC cache exhaustion / FTL stalls.
+
+    Heuristic: flag iteration if:
+      - io_write_ios < 0.7 * median(io_write_ios), OR
+      - iops < 0.7 * median(iops) AND io_util_pct > 90%
+
+    Returns list of degraded iteration indices.
+    """
+    if len(iterations) < 3:
+        return []
+
+    write_ios = [it.get("io_write_ios", 0) for it in iterations]
+    iops_vals = [it.get("iops", 0) for it in iterations]
+    util_vals = [it.get("io_util_pct", 0) for it in iterations]
+
+    med_writes = sorted(write_ios)[len(write_ios) // 2]
+    med_iops = sorted(iops_vals)[len(iops_vals) // 2]
+
+    degraded = []
+    for i in range(len(iterations)):
+        if med_writes > 0 and write_ios[i] < 0.7 * med_writes:
+            degraded.append(i)
+        elif med_iops > 0 and iops_vals[i] < 0.7 * med_iops and util_vals[i] > 90:
+            degraded.append(i)
+
+    return degraded
 
 
 def percentage_change(baseline: float, new_value: float) -> float:

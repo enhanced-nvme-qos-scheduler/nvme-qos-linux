@@ -32,7 +32,7 @@ from lib.system import (
 )
 from lib.fio_runner import FioRunner
 from lib.metrics import extract_fio_metrics, get_primary_metrics, get_normal_metrics
-from lib.analysis import calculate_stats, percentage_change, two_sample_ttest, compare_results
+from lib.analysis import calculate_stats, percentage_change, two_sample_ttest, compare_results, detect_degraded_iterations
 from lib.output import (
     save_json, save_csv, flatten_result, CSV_FIELDNAMES,
     generate_markdown_report, generate_comparison_report,
@@ -188,6 +188,274 @@ def _run_drift_probe(runner: FioRunner, runtime: int = 5) -> Optional[float]:
     return None
 
 
+def _format_summary_line(label: str, avg_metrics: Dict, elapsed: float,
+                         pct_change: float = None, degraded: List[int] = None) -> str:
+    """Format a summary line for baseline or QoS results."""
+    change_str = ""
+    if pct_change is not None:
+        change_str = f"  {pct_change:+.1f}%"
+
+    degraded_str = ""
+    if degraded:
+        degraded_str = f"  ({len(degraded)} degraded)"
+
+    util_pct = avg_metrics.get('io_util_pct', 0)
+    return (
+        f"{label}: "
+        f"p50={format_us(avg_metrics['p50_us']):>8} "
+        f"p90={format_us(avg_metrics['p90_us']):>8} "
+        f"p99={format_us(avg_metrics['p99_us']):>8} "
+        f"p999={format_us(avg_metrics['p999_us']):>8} "
+        f"iops={si_format(avg_metrics['iops']):>8} "
+        f"cpu={avg_metrics['cpu_pct']:5.1f}% "
+        f"util={util_pct:5.1f}% "
+        f"[{elapsed:.1f}s]{change_str}{degraded_str}"
+    )
+
+
+def _color_change(pct_change: float) -> str:
+    """Color a percentage change string for terminal output."""
+    change_str = f"  {pct_change:+.1f}%"
+    if pct_change <= -30:
+        return colored(change_str, "green")
+    elif pct_change <= -10:
+        return colored(change_str, "yellow")
+    elif pct_change > 5:
+        return colored(change_str, "red")
+    return change_str
+
+
+def _run_interleaved_depth(
+    runner: FioRunner, device: NVMeDevice, config: BenchmarkConfig,
+    depth: int, weight: int, cpus_allowed: Optional[str],
+    kernel_stats: Optional[QoSKernelStats],
+    results: Dict, run_fn, label_prefix: str = "",
+    workload_type: Optional[str] = None,
+) -> None:
+    """Run interleaved baseline+QoS iterations for a single depth.
+
+    Baseline and QoS iterations alternate back-to-back within each pair,
+    ensuring both experience identical drive state. Cooldown (if configured)
+    only happens between pairs.
+    """
+    run_baseline = config.run_baseline
+    run_qos = config.run_qos and device.qos_available
+    interleaved = run_baseline and run_qos
+
+    baseline_results = []
+    baseline_normal = []
+    qos_results = []
+    qos_normal = []
+
+    # Reset kernel counters once before the interleaved loop
+    ks_available = kernel_stats and kernel_stats.available
+    if ks_available:
+        try:
+            kernel_stats.reset()
+        except (PermissionError, OSError):
+            ks_available = False
+
+    buf_tag = "buf " if workload_type == "buffered" else ""
+    progress_label = f"{buf_tag}qd={depth}" if interleaved else (
+        f"{'baseline ' if run_baseline else 'qos '}{buf_tag}w={weight} qd={depth}"
+    )
+    progress = Progress(progress_label, config.iterations)
+
+    for iteration in range(config.iterations):
+        progress.set(iteration)
+
+        # --- Baseline iteration ---
+        if run_baseline:
+            if device.qos_available:
+                device.set_qos_enabled(False)
+
+            success, fio_data = run_fn(
+                high_iodepth=depth,
+                high_numjobs=config.high_numjobs,
+                normal_iodepth=depth,
+                normal_numjobs=config.normal_numjobs,
+                runtime=config.runtime,
+                ramp_time=config.ramp_time,
+                iteration=iteration,
+                label=f"{label_prefix}baseline_i{iteration}",
+                cpus_allowed=cpus_allowed,
+                workload_params=config.workload_params,
+            )
+
+            if success and fio_data:
+                metrics = extract_fio_metrics(fio_data)
+                primary = get_primary_metrics(metrics)
+                baseline_results.append(primary)
+                norm = get_normal_metrics(metrics)
+                if norm:
+                    baseline_normal.append(norm)
+
+        # --- QoS iteration (back-to-back, no gap) ---
+        if run_qos:
+            device.set_qos_enabled(True)
+
+            success, fio_data = run_fn(
+                high_iodepth=depth,
+                high_numjobs=config.high_numjobs,
+                normal_iodepth=depth,
+                normal_numjobs=config.normal_numjobs,
+                runtime=config.runtime,
+                ramp_time=config.ramp_time,
+                iteration=iteration,
+                label=f"{label_prefix}qos_w{weight}_i{iteration}",
+                cpus_allowed=cpus_allowed,
+                workload_params=config.workload_params,
+            )
+
+            if success and fio_data:
+                metrics = extract_fio_metrics(fio_data)
+                primary = get_primary_metrics(metrics)
+                qos_results.append(primary)
+                norm = get_normal_metrics(metrics)
+                if norm:
+                    qos_normal.append(norm)
+
+        # --- Cooldown AFTER the pair, before next pair ---
+        if config.iter_cooldown and iteration < config.iterations - 1:
+            time.sleep(config.iter_cooldown)
+
+    elapsed = progress.elapsed()
+
+    # --- Post-loop: aggregate and store baseline ---
+    if baseline_results:
+        degraded = detect_degraded_iterations(baseline_results)
+        avg_bl = _aggregate_iterations(baseline_results)
+        avg_bl_norm = _aggregate_iterations(baseline_normal) if baseline_normal else {}
+
+        bl_config = {
+            "qos_enabled": False,
+            "iodepth": depth,
+            "paired_weight": weight,
+        }
+        if workload_type:
+            bl_config["workload"] = workload_type
+
+        result = {
+            "config": bl_config,
+            "metrics": avg_bl,
+            "iterations": baseline_results,
+        }
+        if avg_bl_norm:
+            result["normal_metrics"] = avg_bl_norm
+        if degraded:
+            result["degraded_iterations"] = degraded
+        results["baseline"].append(result)
+        results["all"].append(result)
+
+        degraded_list = degraded if degraded else None
+        bl_label = f"baseline {buf_tag}qd={depth:<3}"
+        line = _format_summary_line(bl_label, avg_bl, elapsed, degraded=degraded_list)
+        progress.finish(line)
+
+    # --- Post-loop: aggregate and store QoS ---
+    if qos_results:
+        degraded = detect_degraded_iterations(qos_results)
+        avg_qos = _aggregate_iterations(qos_results)
+        avg_qos_norm = _aggregate_iterations(qos_normal) if qos_normal else {}
+
+        # Collect kernel counters (accumulated across QoS iterations only)
+        ks_counters = None
+        ks_fairness = None
+        if ks_available:
+            try:
+                ks_counters = kernel_stats.read_aggregate()
+                ks_fairness = QoSKernelStats.validate_fairness(
+                    ks_counters, weight)
+            except (PermissionError, OSError):
+                pass
+
+        # Calculate change vs paired baseline
+        pct_change = None
+        norm_pct_change = None
+        baseline_match = next(
+            (b for b in results["baseline"]
+             if b["config"]["iodepth"] == depth
+             and b["config"].get("paired_weight") == weight
+             and b["config"].get("workload") == workload_type),
+            None
+        )
+        if baseline_match:
+            pct_change = percentage_change(
+                baseline_match["metrics"]["p99_us"],
+                avg_qos["p99_us"]
+            )
+            bl_norm = baseline_match.get("normal_metrics", {})
+            if bl_norm and avg_qos_norm and bl_norm.get("p99_us"):
+                norm_pct_change = percentage_change(
+                    bl_norm["p99_us"],
+                    avg_qos_norm.get("p99_us", 0)
+                )
+
+        qos_config = {
+            "qos_enabled": True,
+            "qos_weight": weight,
+            "iodepth": depth,
+        }
+        if workload_type:
+            qos_config["workload"] = workload_type
+
+        result = {
+            "config": qos_config,
+            "metrics": avg_qos,
+            "pct_change": pct_change,
+            "norm_pct_change": norm_pct_change,
+            "iterations": qos_results,
+        }
+        if avg_qos_norm:
+            result["normal_metrics"] = avg_qos_norm
+        if ks_counters:
+            result["kernel_stats"] = ks_counters
+        if ks_fairness:
+            result["fairness"] = ks_fairness
+        if degraded:
+            result["degraded_iterations"] = degraded
+        results["qos"].append(result)
+        results["all"].append(result)
+
+        # Print QoS summary line
+        change_str = _color_change(pct_change) if pct_change is not None else ""
+        degraded_str = f"  ({len(degraded)} degraded)" if degraded else ""
+        util_pct = avg_qos.get('io_util_pct', 0)
+        qos_label = f"qos {buf_tag}w={weight:<2} qd={depth:<3}"
+        line1 = (
+            f"{qos_label}: "
+            f"p50={format_us(avg_qos['p50_us']):>8} "
+            f"p90={format_us(avg_qos['p90_us']):>8} "
+            f"p99={format_us(avg_qos['p99_us']):>8} "
+            f"p999={format_us(avg_qos['p999_us']):>8} "
+            f"iops={si_format(avg_qos['iops']):>8} "
+            f"cpu={avg_qos['cpu_pct']:5.1f}% "
+            f"util={util_pct:5.1f}% "
+            f"[{elapsed:.1f}s]{change_str}{degraded_str}"
+        )
+        print(f"\r\033[K{line1}", file=sys.stderr)
+
+        # Kernel stats summary line
+        if ks_counters and ks_fairness:
+            ks_line = QoSKernelStats.format_summary(
+                ks_counters, ks_fairness)
+            print(f"{'':>24}{ks_line}", file=sys.stderr)
+
+        # Normal-priority summary line
+        if avg_qos_norm:
+            norm_change_str = ""
+            if norm_pct_change is not None:
+                norm_change_str = f" ({norm_pct_change:+.1f}%)"
+            norm_line = (
+                f"{'':>24}NORM "
+                f"p99={format_us(avg_qos_norm.get('p99_us', 0)):>8}"
+                f"{norm_change_str} "
+                f"iops={si_format(avg_qos_norm.get('iops', 0)):>8} "
+                f"bw={avg_qos_norm.get('bw_mbps', 0):>6.0f}MB/s"
+            )
+            print(norm_line, file=sys.stderr)
+
+
 def run_benchmark_suite(
     device: NVMeDevice,
     config: BenchmarkConfig,
@@ -195,7 +463,13 @@ def run_benchmark_suite(
     compare: bool = False,
     kernel_stats: Optional[QoSKernelStats] = None,
 ) -> Dict[str, Any]:
-    """Run the complete benchmark suite."""
+    """Run the complete benchmark suite with interleaved baseline/QoS iterations.
+
+    Instead of running all baseline iterations first then all QoS iterations,
+    this interleaves them: for each iteration, baseline runs first, then QoS
+    immediately after. Both experience identical drive state per pair,
+    eliminating SLC cache exhaustion bias.
+    """
     results = {
         "baseline": [],
         "qos": [],
@@ -234,413 +508,70 @@ def run_benchmark_suite(
         if config.namespace_policy and device.qos_available:
             device.set_qos_policy(config.namespace_policy)
 
-        # Baseline tests (QoS disabled)
-        if config.run_baseline:
+        # Randomize weight order to avoid systematic bias
+        weights = list(config.weights)
+        if len(weights) > 1:
+            random.shuffle(weights)
+            print(f"Weight order (randomized): {weights}", file=sys.stderr)
+        weight_order = weights
+
+        # Pre-test drift probe
+        pre_test_p50 = _run_drift_probe(runner)
+        if pre_test_p50 is not None:
+            drift_probes.append({"phase": "pre_test", "p50_us": pre_test_p50})
+
+        print_separator()
+
+        first_weight = True
+        for weight in weights:
+            # Drift probe between weight phases
+            if not first_weight and pre_test_p50 is not None:
+                probe_p50 = _run_drift_probe(runner)
+                if probe_p50 is not None:
+                    drift_probes.append({"phase": f"before_w{weight}", "p50_us": probe_p50})
+                    if probe_p50 / pre_test_p50 > 3.0:
+                        print(colored(
+                            f"  Drive state drift detected "
+                            f"(p50: {pre_test_p50:.0f}us -> {probe_p50:.0f}us); "
+                            f"cross-weight comparisons may be invalid",
+                            "yellow"), file=sys.stderr)
+            first_weight = False
+
+            # Set weight once before the depth loop (persists even when QoS disabled)
             if device.qos_available:
-                device.set_qos_enabled(False)
-            print_separator()
+                device.set_qos_weight(weight)
 
             for depth in config.depths:
-                # Skip low depths that won't show QoS benefit
                 if depth < 16 and len(config.depths) > 3:
                     continue
 
-                depth_results = []
-                normal_results = []
-                progress = Progress(f"baseline qd={depth}", config.iterations)
+                # Interleaved direct I/O
+                _run_interleaved_depth(
+                    runner, device, config, depth, weight, cpus_allowed,
+                    kernel_stats, results,
+                    run_fn=runner.run_mixed_workload,
+                )
 
-                for iteration in range(config.iterations):
-                    progress.set(iteration)
-
-                    success, fio_data = runner.run_mixed_workload(
-                        high_iodepth=depth,
-                        high_numjobs=config.high_numjobs,
-                        normal_iodepth=depth,
-                        normal_numjobs=config.normal_numjobs,
-                        runtime=config.runtime,
-                        ramp_time=config.ramp_time,
-                        iteration=iteration,
-                        label="baseline",
-                        cpus_allowed=cpus_allowed,
-                        workload_params=config.workload_params,
-                    )
-
-                    if success and fio_data:
-                        metrics = extract_fio_metrics(fio_data)
-                        primary = get_primary_metrics(metrics)
-                        depth_results.append(primary)
-                        norm = get_normal_metrics(metrics)
-                        if norm:
-                            normal_results.append(norm)
-
-                if depth_results:
-                    # Aggregate across iterations
-                    avg_metrics = _aggregate_iterations(depth_results)
-                    avg_normal = _aggregate_iterations(normal_results) if normal_results else {}
-                    elapsed = progress.elapsed()
-                    result = {
-                        "config": {
-                            "qos_enabled": False,
-                            "iodepth": depth,
-                        },
-                        "metrics": avg_metrics,
-                        "iterations": depth_results,
-                    }
-                    if avg_normal:
-                        result["normal_metrics"] = avg_normal
-                    results["baseline"].append(result)
-                    results["all"].append(result)
-
-                    util_pct = avg_metrics.get('io_util_pct', 0)
-                    progress.finish(
-                        f"baseline qd={depth:<3}: "
-                        f"p50={format_us(avg_metrics['p50_us']):>8} "
-                        f"p90={format_us(avg_metrics['p90_us']):>8} "
-                        f"p99={format_us(avg_metrics['p99_us']):>8} "
-                        f"p999={format_us(avg_metrics['p999_us']):>8} "
-                        f"iops={si_format(avg_metrics['iops']):>8} "
-                        f"cpu={avg_metrics['cpu_pct']:5.1f}% "
-                        f"util={util_pct:5.1f}% "
-                        f"[{elapsed:.1f}s]"
-                    )
-
-            # Baseline buffered I/O tests (opt-in via --buffered)
-            if config.run_buffered:
-                for depth in config.depths:
-                    if depth < 16 and len(config.depths) > 3:
-                        continue
-
-                    depth_results = []
-                    normal_results = []
-                    progress = Progress(f"baseline buf qd={depth}", config.iterations)
-
-                    for iteration in range(config.iterations):
-                        progress.set(iteration)
-
-                        success, fio_data = runner.run_buffered_workload(
-                            high_iodepth=depth,
-                            high_numjobs=config.high_numjobs,
-                            normal_iodepth=depth,
-                            normal_numjobs=config.normal_numjobs,
-                            runtime=config.runtime,
-                            ramp_time=config.ramp_time,
-                            iteration=iteration,
-                            label="baseline_buf",
-                            cpus_allowed=cpus_allowed,
-                            workload_params=config.workload_params,
-                        )
-
-                        if success and fio_data:
-                            metrics = extract_fio_metrics(fio_data)
-                            primary = get_primary_metrics(metrics)
-                            depth_results.append(primary)
-                            norm = get_normal_metrics(metrics)
-                            if norm:
-                                normal_results.append(norm)
-
-                    if depth_results:
-                        avg_metrics = _aggregate_iterations(depth_results)
-                        avg_normal = _aggregate_iterations(normal_results) if normal_results else {}
-                        elapsed = progress.elapsed()
-                        result = {
-                            "config": {
-                                "qos_enabled": False,
-                                "iodepth": depth,
-                                "workload": "buffered",
-                            },
-                            "metrics": avg_metrics,
-                            "iterations": depth_results,
-                        }
-                        if avg_normal:
-                            result["normal_metrics"] = avg_normal
-                        results["baseline"].append(result)
-                        results["all"].append(result)
-
-                        util_pct = avg_metrics.get('io_util_pct', 0)
-                        progress.finish(
-                            f"baseline buf qd={depth:<3}: "
-                            f"p50={format_us(avg_metrics['p50_us']):>8} "
-                            f"p90={format_us(avg_metrics['p90_us']):>8} "
-                            f"p99={format_us(avg_metrics['p99_us']):>8} "
-                            f"p999={format_us(avg_metrics['p999_us']):>8} "
-                            f"iops={si_format(avg_metrics['iops']):>8} "
-                            f"cpu={avg_metrics['cpu_pct']:5.1f}% "
-                            f"util={util_pct:5.1f}% "
-                            f"[{elapsed:.1f}s]"
-                        )
-
-        # Reset SSD state between phases to avoid SLC write cache bias.
-        # Without this, baselines run on fast SLC-cached storage while QoS
-        # tests face degraded TLC-direct speeds after the cache fills.
-        # if config.run_baseline and config.run_qos and device.qos_available:
-        #     print_separator()
-        #     print("Resetting device state (TRIM + cooldown)...",
-        #           file=sys.stderr, end="", flush=True)
-        #     if device.trim():
-        #         cooldown = 10
-        #         time.sleep(cooldown)
-        #         print(f" done ({cooldown}s cooldown)", file=sys.stderr)
-        #     else:
-        #         print(" blkdiscard failed (skipped)", file=sys.stderr)
-
-        # QoS tests (QoS enabled)
-        if config.run_qos and device.qos_available:
-            device.set_qos_enabled(True)
-
-            # Randomize weight order to avoid systematic bias
-            weights = list(config.weights)
-            if len(weights) > 1:
-                random.shuffle(weights)
-                print(f"Weight order (randomized): {weights}", file=sys.stderr)
-            weight_order = weights
-
-            # Initial drift probe
-            baseline_p50 = _run_drift_probe(runner)
-            if baseline_p50 is not None:
-                drift_probes.append({"phase": "initial", "p50_us": baseline_p50})
-
-            first_weight = True
-            for weight in weights:
-                # Drift probe between weight phases
-                if not first_weight and baseline_p50 is not None:
-                    probe_p50 = _run_drift_probe(runner)
-                    if probe_p50 is not None:
-                        drift_probes.append({"phase": f"before_w{weight}", "p50_us": probe_p50})
-                        if probe_p50 / baseline_p50 > 3.0:
-                            print(colored(
-                                f"  Drive state drift detected "
-                                f"(p50: {baseline_p50:.0f}us -> {probe_p50:.0f}us); "
-                                f"cross-weight comparisons may be invalid",
-                                "yellow"), file=sys.stderr)
-                first_weight = False
-
-                device.set_qos_weight(weight)
-
-                for depth in config.depths:
-                    if depth < 16 and len(config.depths) > 3:
-                        continue
-
-                    depth_results = []
-                    normal_results = []
-                    progress = Progress(f"qos w={weight} qd={depth}", config.iterations)
-
-                    # Reset kernel counters once per depth
-                    ks_available = kernel_stats and kernel_stats.available
-                    if ks_available:
-                        try:
-                            kernel_stats.reset()
-                        except (PermissionError, OSError):
-                            ks_available = False
-
-                    for iteration in range(config.iterations):
-                        progress.set(iteration)
-
-                        success, fio_data = runner.run_mixed_workload(
-                            high_iodepth=depth,
-                            high_numjobs=config.high_numjobs,
-                            normal_iodepth=depth,
-                            normal_numjobs=config.normal_numjobs,
-                            runtime=config.runtime,
-                            ramp_time=config.ramp_time,
-                            iteration=iteration,
-                            label=f"qos_w{weight}",
-                            cpus_allowed=cpus_allowed,
-                            workload_params=config.workload_params,
-                        )
-
-                        if success and fio_data:
-                            metrics = extract_fio_metrics(fio_data)
-                            primary = get_primary_metrics(metrics)
-                            depth_results.append(primary)
-                            norm = get_normal_metrics(metrics)
-                            if norm:
-                                normal_results.append(norm)
-
-                    if depth_results:
-                        avg_metrics = _aggregate_iterations(depth_results)
-                        avg_normal = _aggregate_iterations(normal_results) if normal_results else {}
-                        elapsed = progress.elapsed()
-
-                        # Collect kernel counters
-                        ks_counters = None
-                        ks_fairness = None
-                        if ks_available:
-                            try:
-                                ks_counters = kernel_stats.read_aggregate()
-                                ks_fairness = QoSKernelStats.validate_fairness(
-                                    ks_counters, weight)
-                            except (PermissionError, OSError):
-                                pass
-
-                        # Calculate change vs baseline
-                        pct_change = None
-                        norm_pct_change = None
-                        baseline_match = next(
-                            (b for b in results["baseline"]
-                             if b["config"]["iodepth"] == depth
-                             and b["config"].get("workload") is None),
-                            None
-                        )
-                        if baseline_match:
-                            pct_change = percentage_change(
-                                baseline_match["metrics"]["p99_us"],
-                                avg_metrics["p99_us"]
-                            )
-                            # Normal-priority p99 change vs baseline
-                            bl_norm = baseline_match.get("normal_metrics", {})
-                            if bl_norm and avg_normal and bl_norm.get("p99_us"):
-                                norm_pct_change = percentage_change(
-                                    bl_norm["p99_us"],
-                                    avg_normal.get("p99_us", 0)
-                                )
-
-                        result = {
-                            "config": {
-                                "qos_enabled": True,
-                                "qos_weight": weight,
-                                "iodepth": depth,
-                            },
-                            "metrics": avg_metrics,
-                            "pct_change": pct_change,
-                            "norm_pct_change": norm_pct_change,
-                            "iterations": depth_results,
-                        }
-                        if avg_normal:
-                            result["normal_metrics"] = avg_normal
-                        if ks_counters:
-                            result["kernel_stats"] = ks_counters
-                        if ks_fairness:
-                            result["fairness"] = ks_fairness
-                        results["qos"].append(result)
-                        results["all"].append(result)
-
-                        change_str = f"  {pct_change:+.1f}%" if pct_change is not None else ""
-                        # Color the change
-                        if pct_change is not None:
-                            if pct_change <= -30:
-                                change_str = colored(change_str, "green")
-                            elif pct_change <= -10:
-                                change_str = colored(change_str, "yellow")
-                            elif pct_change > 5:
-                                change_str = colored(change_str, "red")
-
-                        util_pct = avg_metrics.get('io_util_pct', 0)
-                        line1 = (
-                            f"qos w={weight:<2} qd={depth:<3}: "
-                            f"p50={format_us(avg_metrics['p50_us']):>8} "
-                            f"p90={format_us(avg_metrics['p90_us']):>8} "
-                            f"p99={format_us(avg_metrics['p99_us']):>8} "
-                            f"p999={format_us(avg_metrics['p999_us']):>8} "
-                            f"iops={si_format(avg_metrics['iops']):>8} "
-                            f"cpu={avg_metrics['cpu_pct']:5.1f}% "
-                            f"util={util_pct:5.1f}% "
-                            f"[{elapsed:.1f}s]{change_str}"
-                        )
-                        progress.finish(line1)
-
-                        # Kernel stats summary line
-                        if ks_counters and ks_fairness:
-                            ks_line = QoSKernelStats.format_summary(
-                                ks_counters, ks_fairness)
-                            print(f"{'':>24}{ks_line}", file=sys.stderr)
-
-                        # Normal-priority summary line
-                        if avg_normal:
-                            norm_change_str = ""
-                            if norm_pct_change is not None:
-                                norm_change_str = f" ({norm_pct_change:+.1f}%)"
-                            norm_line = (
-                                f"{'':>24}NORM "
-                                f"p99={format_us(avg_normal.get('p99_us', 0)):>8}"
-                                f"{norm_change_str} "
-                                f"iops={si_format(avg_normal.get('iops', 0)):>8} "
-                                f"bw={avg_normal.get('bw_mbps', 0):>6.0f}MB/s"
-                            )
-                            print(norm_line, file=sys.stderr)
-
-                # QoS buffered I/O tests for this weight
+                # Interleaved buffered I/O (opt-in)
                 if config.run_buffered:
-                    for depth in config.depths:
-                        if depth < 16 and len(config.depths) > 3:
-                            continue
+                    _run_interleaved_depth(
+                        runner, device, config, depth, weight, cpus_allowed,
+                        kernel_stats, results,
+                        run_fn=runner.run_buffered_workload,
+                        label_prefix="buf_",
+                        workload_type="buffered",
+                    )
 
-                        depth_results = []
-                        progress = Progress(f"qos buf w={weight} qd={depth}", config.iterations)
-
-                        for iteration in range(config.iterations):
-                            progress.set(iteration)
-
-                            success, fio_data = runner.run_buffered_workload(
-                                high_iodepth=depth,
-                                high_numjobs=config.high_numjobs,
-                                normal_iodepth=depth,
-                                normal_numjobs=config.normal_numjobs,
-                                runtime=config.runtime,
-                                ramp_time=config.ramp_time,
-                                iteration=iteration,
-                                label=f"qos_buf_w{weight}",
-                                cpus_allowed=cpus_allowed,
-                                workload_params=config.workload_params,
-                            )
-
-                            if success and fio_data:
-                                metrics = extract_fio_metrics(fio_data)
-                                primary = get_primary_metrics(metrics)
-                                depth_results.append(primary)
-
-                        if depth_results:
-                            avg_metrics = _aggregate_iterations(depth_results)
-                            elapsed = progress.elapsed()
-
-                            # Compare vs baseline buffered
-                            pct_change = None
-                            baseline_match = next(
-                                (b for b in results["baseline"]
-                                 if b["config"]["iodepth"] == depth
-                                 and b["config"].get("workload") == "buffered"),
-                                None
-                            )
-                            if baseline_match:
-                                pct_change = percentage_change(
-                                    baseline_match["metrics"]["p99_us"],
-                                    avg_metrics["p99_us"]
-                                )
-
-                            result = {
-                                "config": {
-                                    "qos_enabled": True,
-                                    "qos_weight": weight,
-                                    "iodepth": depth,
-                                    "workload": "buffered",
-                                },
-                                "metrics": avg_metrics,
-                                "pct_change": pct_change,
-                                "iterations": depth_results,
-                            }
-                            results["qos"].append(result)
-                            results["all"].append(result)
-
-                            change_str = f"  {pct_change:+.1f}%" if pct_change is not None else ""
-                            if pct_change is not None:
-                                if pct_change <= -30:
-                                    change_str = colored(change_str, "green")
-                                elif pct_change <= -10:
-                                    change_str = colored(change_str, "yellow")
-                                elif pct_change > 5:
-                                    change_str = colored(change_str, "red")
-
-                            util_pct = avg_metrics.get('io_util_pct', 0)
-                            progress.finish(
-                                f"qos buf w={weight:<2} qd={depth:<3}: "
-                                f"p50={format_us(avg_metrics['p50_us']):>8} "
-                                f"p90={format_us(avg_metrics['p90_us']):>8} "
-                                f"p99={format_us(avg_metrics['p99_us']):>8} "
-                                f"p999={format_us(avg_metrics['p999_us']):>8} "
-                                f"iops={si_format(avg_metrics['iops']):>8} "
-                                f"cpu={avg_metrics['cpu_pct']:5.1f}% "
-                                f"util={util_pct:5.1f}% "
-                                f"[{elapsed:.1f}s]{change_str}"
-                            )
+        # Post-test drift probe
+        post_test_p50 = _run_drift_probe(runner)
+        if post_test_p50 is not None:
+            drift_probes.append({"phase": "post_test", "p50_us": post_test_p50})
+            if pre_test_p50 and post_test_p50 / pre_test_p50 > 3.0:
+                print(colored(
+                    f"  Drive state drift detected across test run "
+                    f"(p50: {pre_test_p50:.0f}us -> {post_test_p50:.0f}us); "
+                    f"results may be affected",
+                    "yellow"), file=sys.stderr)
 
         # CPU overhead tests (opt-in)
         if config.run_cpu_overhead and device.qos_available:
@@ -791,7 +722,7 @@ def run_benchmark_suite(
 
 
 def _aggregate_iterations(iterations: List[Dict]) -> Dict[str, float]:
-    """Aggregate metrics across iterations (mean values)."""
+    """Aggregate metrics across iterations using median (robust to outliers)."""
     if not iterations:
         return {}
 
@@ -800,7 +731,12 @@ def _aggregate_iterations(iterations: List[Dict]) -> Dict[str, float]:
     for key in keys:
         values = [it[key] for it in iterations if key in it]
         if values:
-            result[key] = sum(values) / len(values)
+            sorted_v = sorted(values)
+            n = len(sorted_v)
+            if n % 2 == 0:
+                result[key] = (sorted_v[n // 2 - 1] + sorted_v[n // 2]) / 2
+            else:
+                result[key] = sorted_v[n // 2]
     return result
 
 
@@ -1468,8 +1404,13 @@ def cmd_run(args) -> int:
             cpu_changes = []
             for qos_r in results["qos"]:
                 depth = qos_r["config"]["iodepth"]
+                weight = qos_r["config"].get("qos_weight")
+                workload = qos_r["config"].get("workload")
                 baseline_match = next(
-                    (b for b in results["baseline"] if b["config"]["iodepth"] == depth),
+                    (b for b in results["baseline"]
+                     if b["config"]["iodepth"] == depth
+                     and b["config"].get("paired_weight") == weight
+                     and b["config"].get("workload") == workload),
                     None
                 )
                 if baseline_match:
@@ -1612,12 +1553,19 @@ def _si(n) -> str:
         return f"{n/1_000_000:.1f}M"
 
 
-def _find_baseline_match(results: List[Dict], depth: int, workload: Optional[str] = None) -> Optional[Dict]:
-    """Find the baseline result matching a given depth and workload."""
+def _find_baseline_match(results: List[Dict], depth: int,
+                         workload: Optional[str] = None,
+                         paired_weight: Optional[int] = None) -> Optional[Dict]:
+    """Find the baseline result matching a given depth, workload, and paired weight."""
     for b in results.get("baseline", []):
-        if (b["config"]["iodepth"] == depth
-                and b["config"].get("workload") == workload):
-            return b
+        cfg = b["config"]
+        if cfg["iodepth"] != depth:
+            continue
+        if cfg.get("workload") != workload:
+            continue
+        if paired_weight is not None and cfg.get("paired_weight") != paired_weight:
+            continue
+        return b
     return None
 
 
@@ -1830,6 +1778,13 @@ def _print_variance_section(results: Dict) -> None:
         min_n = min(min_n, stats.n)
         ci_str = f"[{format_us(stats.ci_low)}, {format_us(stats.ci_high)}]"
         range_str = f"[{format_us(stats.min_val)}-{format_us(stats.max_val)}]"
+
+        degraded = r.get("degraded_iterations", [])
+        degraded_str = ""
+        if degraded:
+            iters_str = ",".join(str(i) for i in degraded)
+            degraded_str = colored(f"  ({len(degraded)} DEGRADED: iters {iters_str})", "yellow")
+
         print(
             f" {label:>10} "
             f"{format_us(stats.mean):>10} "
@@ -1837,6 +1792,7 @@ def _print_variance_section(results: Dict) -> None:
             f"{ci_str:>20} "
             f"{range_str:>18} "
             f"{stats.n:>3}"
+            f"{degraded_str}"
         )
 
     if min_n < 5 and min_n != float('inf'):
@@ -1858,7 +1814,8 @@ def _print_significance_section(results: Dict) -> None:
         weight = config.get("qos_weight", 0)
         workload = config.get("workload")
 
-        bl_match = _find_baseline_match(results, depth, workload)
+        bl_match = _find_baseline_match(results, depth, workload,
+                                        paired_weight=weight)
         if not bl_match:
             continue
 
@@ -1878,11 +1835,24 @@ def _print_significance_section(results: Dict) -> None:
         if weight:
             label += f" w={weight}"
 
+        # Degraded iteration notes
+        bl_degraded = bl_match.get("degraded_iterations", [])
+        qos_degraded = r.get("degraded_iterations", [])
+        degraded_note = ""
+        if bl_degraded or qos_degraded:
+            parts = []
+            if bl_degraded:
+                parts.append(f"baseline had {len(bl_degraded)} degraded")
+            if qos_degraded:
+                parts.append(f"QoS had {len(qos_degraded)} degraded")
+            degraded_note = " -- " + colored("; ".join(parts), "yellow")
+
         if n < 2:
-            lines.append(f" {label}: p99 {pct_str} -- INSUFFICIENT DATA (n={n})")
+            lines.append(f" {label}: p99 {pct_str} -- INSUFFICIENT DATA (n={n}){degraded_note}")
         elif n < 5:
             lines.append(f" {label}: p99 {pct_str} -- "
-                         + colored(f"NOT SIGNIFICANT (n={n}, need >=5 for t-test)", "yellow"))
+                         + colored(f"NOT SIGNIFICANT (n={n}, need >=5 for t-test)", "yellow")
+                         + degraded_note)
         else:
             ttest = two_sample_ttest(bl_p99, qos_p99)
             d_label = _effect_size_label(ttest.effect_size)
@@ -1893,7 +1863,7 @@ def _print_significance_section(results: Dict) -> None:
                 )
             else:
                 sig_str = f"NOT SIGNIFICANT (p>=0.05, d={abs(ttest.effect_size):.1f} {d_label})"
-            lines.append(f" {label}: p99 {pct_str} -- {sig_str}")
+            lines.append(f" {label}: p99 {pct_str} -- {sig_str}{degraded_note}")
 
         has_data = True
 
