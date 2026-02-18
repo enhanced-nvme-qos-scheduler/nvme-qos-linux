@@ -260,6 +260,7 @@ struct nvme_queue {
 	struct list_head high_prio_list;
 	struct list_head normal_prio_list;
 	s64 high_tokens;
+	s64 normal_tokens;
 	unsigned long last_refill_jiffies;
 	atomic_t in_flight;
 #endif
@@ -1303,7 +1304,8 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 {
 	unsigned long now = jiffies;
 	unsigned long delta = now - nvmeq->last_refill_jiffies;
-	unsigned int rate = nvmeq->dev->qos_high_weight;
+	unsigned int high_rate = nvmeq->dev->qos_high_weight;
+	unsigned int normal_rate = 1;
 	unsigned int cap = nvmeq->dev->qos_burst_cap;
 
 	if (!delta)
@@ -1312,13 +1314,19 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 	nvmeq->last_refill_jiffies = now;
 
 	if (nvmeq->high_tokens < cap) {
-		s64 new_tokens = (s64)delta * rate;
-
+		s64 new_tokens = (s64)delta * high_rate;
 		nvmeq->high_tokens += new_tokens;
-
 		if (nvmeq->high_tokens > cap)
 			nvmeq->high_tokens = cap;
 	}
+
+	if (nvmeq->normal_tokens < cap) {
+		s64 new_tokens = (s64)delta * normal_rate;
+		nvmeq->normal_tokens += new_tokens;
+		if (nvmeq->normal_tokens > cap)
+			nvmeq->normal_tokens = cap;
+	}
+
 }
 
 /**
@@ -1338,29 +1346,26 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_h
 
 	nvme_qos_update_tokens(nvmeq);
 
-	if (high_pending && normal_pending && nvmeq->high_tokens <= 0) {
-		req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
-		list_del_init(&req->queuelist);
-		*is_high = false;
-		return req;
-	}
-
 	if (high_pending) {
 		if (nvmeq->high_tokens > 0 || !normal_pending) {
 			req = list_first_entry(&nvmeq->high_prio_list, struct request, queuelist);
 			list_del_init(&req->queuelist);
-
-			nvmeq->high_tokens--;
+			if (nvmeq->high_tokens > 0)
+				nvmeq->high_tokens--;
 			*is_high = true;
 			return req;
 		}
 	}
 
 	if (normal_pending) {
-		req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
-		list_del_init(&req->queuelist);
-		*is_high = false;
-		return req;
+		if (nvmeq->normal_tokens > 0 || !high_pending) {
+			req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
+			list_del_init(&req->queuelist);
+			if (nvmeq->normal_tokens > 0)
+				nvmeq->normal_tokens--;
+			*is_high = false;
+			return req;
+		}
 	}
 
 	return NULL;
@@ -2287,6 +2292,7 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 	INIT_LIST_HEAD(&nvmeq->high_prio_list);
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
 	nvmeq->high_tokens = dev->qos_high_weight;
+	nvmeq->normal_tokens = 1;
 	nvmeq->last_refill_jiffies = jiffies;
 	atomic_set(&nvmeq->in_flight, 0);
 #endif
@@ -2343,6 +2349,7 @@ static void nvme_init_queue(struct nvme_queue *nvmeq, u16 qid)
 	INIT_LIST_HEAD(&nvmeq->high_prio_list);
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
 	nvmeq->high_tokens = dev->qos_high_weight;
+	nvmeq->normal_tokens = 1;
 	nvmeq->last_refill_jiffies = jiffies;
 	atomic_set(&nvmeq->in_flight, 0);
 #endif
@@ -3960,7 +3967,7 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 	dev->qos_enabled = 0;
 	dev->qos_high_weight = 9;
 	dev->qos_batch_limit = NVME_QOS_MAX_BATCH;
-	dev->qos_burst_cap = 2000;
+	dev->qos_burst_cap = dev->qos_high_weight * (HZ / 10);
 #endif
 
 	return dev;
