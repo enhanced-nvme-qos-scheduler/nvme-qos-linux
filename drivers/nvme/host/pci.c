@@ -1299,13 +1299,27 @@ static bool nvme_qos_is_high_prio(struct request *req)
 	return IOPRIO_PRIO_CLASS(prio) == IOPRIO_CLASS_RT;
 }
 
+/**
+ * Resets the high and normal priority credit counters to their initial values.
+ *
+ * Must be called with sq_lock held.
+ */
 static void nvme_qos_refill_credits(struct nvme_queue *nvmeq)
 {
 	nvmeq->high_credits = nvmeq->dev->qos_high_weight;
 	nvmeq->normal_credits = 1;
 }
 
-static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
+/**
+ * nvme_qos_dequeue_wrr - Dequeue a request using WRR policy
+ * @nvmeq: The NVMe queue to dequeue from
+ * @is_high: Output parameter set to true if the dequeued request is High Priority
+ *
+ * Returns a pointer to the dequeued request, or NULL if both lists are empty.
+ * This function tracks credits for WRR and determines priority status based
+ * on the source list to avoid redundant bio-level priority checks.
+ */
+static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_high)
 {
 	struct request *req = NULL;
 
@@ -1318,6 +1332,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
 		nvmeq->high_credits--;
+		*is_high = true;
 		return req;
 	}
 
@@ -1327,6 +1342,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
 		nvmeq->normal_credits--;
+		*is_high = false;
 		return req;
 	}
 
@@ -1335,6 +1351,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 		req = list_first_entry(&nvmeq->high_prio_list,
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
+		*is_high = true;
 		return req;
 	}
 
@@ -1342,6 +1359,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 		req = list_first_entry(&nvmeq->normal_prio_list,
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
+		*is_high = false;
 		return req;
 	}
 
@@ -1398,13 +1416,14 @@ reset:
 /*
  * nvme_qos_dispatch - Submit pending QoS requests via WRR scheduling
  * @nvmeq: The NVMe queue to dispatch from
- * @commit: Whether to ring the doorbell after submitting commands.
- *          Pass bd->last from queue_rq to batch doorbells with blk-mq,
- *          or true from kick/submit_batch to ring immediately.
+ * @commit: Batch-level doorbell requirement provided by the caller.
+ * If true, MMIO write is requested. If false, the doorbell will only be rung
+ * if a High Prio request is dispatched or submission queue wraps around.
  *
  * Dequeues up to qos_batch_limit requests from the priority lists using
  * weighted round-robin and copies their commands to the SQ. Writes the SQ
- * doorbell once if any requests were submitted and @commit is true.
+ * doorbell once if any requests were submitted and either @commit is true or
+ * high prio requested or submission queue wraps around.
  *
  * Must be called with sq_lock held.
  */
@@ -1412,18 +1431,23 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 {
 	unsigned int depth = nvmeq->q_depth - 1;
 	unsigned int submitted = 0;
+	bool high_prio_submitted = false;
 
 	while (submitted < nvmeq->dev->qos_batch_limit) {
 		unsigned int in_flight = atomic_read(&nvmeq->in_flight);
 		struct request *req;
 		struct nvme_iod *iod;
+		bool is_high_prio = false;
 
 		if (in_flight >= depth)
 			break;
 
-		req = nvme_qos_dequeue_wrr(nvmeq);
+		req = nvme_qos_dequeue_wrr(nvmeq, &is_high_prio);
 		if (!req)
 			break;
+
+		if (is_high_prio)
+			high_prio_submitted = true;
 
 		iod = blk_mq_rq_to_pdu(req);
 		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
@@ -1431,7 +1455,7 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 	}
 
 	if (submitted)
-		nvme_write_sq_db(nvmeq, commit);
+		nvme_write_sq_db(nvmeq, commit || high_prio_submitted);
 
 	nvme_qos_check_enter_bypass(nvmeq);
 }

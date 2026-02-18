@@ -74,9 +74,9 @@ function run_checkpatch() {
 		echo -e "[${GREEN}ok${NC}]"
 	else
 		echo -e "[${RED}FAIL${NC}] ($errors errors)"
-		echo "$log" | grep -E "^ERROR:" | head -20
 		echo ""
-		echo "Run './scripts/checkpatch.pl --no-tree <patch>' for full output"
+		echo "$log"
+		echo ""
 		FAILED=1
 	fi
 }
