@@ -1358,6 +1358,13 @@ def cmd_run(args) -> int:
         config.normal_numjobs = args.normal_numjobs
     if args.max_queues:
         config.max_queues = args.max_queues
+    if args.normal_bs or args.normal_rw:
+        if config.workload_params is None:
+            config.workload_params = {}
+        if args.normal_bs:
+            config.workload_params["normal_bs"] = args.normal_bs
+        if args.normal_rw:
+            config.workload_params["normal_rw"] = args.normal_rw
 
     # Setup output directory
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -2665,6 +2672,10 @@ def main():
                            help="Override high-priority job count")
     run_parser.add_argument("--normal-numjobs", type=int,
                            help="Override normal-priority job count")
+    run_parser.add_argument("--normal-bs",
+                           help="Override normal-priority block size (e.g., 4k, 64k, 256k)")
+    run_parser.add_argument("--normal-rw",
+                           help="Override normal-priority I/O pattern (e.g., write, randwrite, randread)")
     run_parser.add_argument("--max-queues", type=int,
                            help="Pin fio to N CPUs to force N HW queues (increases per-queue contention)")
     run_parser.add_argument("--compare", action="store_true",
