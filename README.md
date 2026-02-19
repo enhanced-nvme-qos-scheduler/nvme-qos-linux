@@ -1,56 +1,23 @@
 # NVMe QoS for Linux
 
-Enhanced QoS scheduling for the in-tree Linux NVMe host driver.
+A lightweight, per-queue QoS scheduler for the in-tree Linux NVMe host driver.
+It reduces p99 read latency for latency-sensitive I/O under contention using a
+two-class weighted round-robin (WRR) dispatch mechanism, while preserving
+throughput and adding minimal CPU overhead. When disabled, the driver behaves
+identically to upstream.
 
-## Project Members
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for setup, build instructions, and
+contribution guidelines.
 
-### Maintainers:
+## Maintainers
 
-@Benjamin-Anderson-II
-@BrandonPacewic
-@TSrirama2026
-@phannawich
+@Benjamin-Anderson-II, @BrandonPacewic, @TSrirama2026, @phannawich,
 @CameronDilworth
 
-### Project Partner:
-
-@godhanipayal
-
-## Development
-
-### Setup
-
-Install the pre-commit hook to automatically check code before committing:
-
-```bash
-./scripts/install-hooks.sh
-```
-
-### Linting
-
-The project uses `checkpatch.pl` (the Linux kernel's style checker) to enforce coding standards.
-
-```bash
-# Check all QoS code (uncommitted changes + QoS-specific checks)
-./scripts/lint.sh
-
-# Check only staged changes (runs automatically via pre-commit hook)
-./scripts/lint.sh --fast
-```
-
-The linter checks for:
-- Kernel coding style errors (via checkpatch.pl)
-- Spaces instead of tabs in QoS code
-- Trailing whitespace
-- Merge conflict markers
-
-### CI
-
-Pull requests automatically run:
-- **checkpatch** - Validates kernel coding style on changed files (errors only, warnings ignored)
+**Project Partner:** @godhanipayal
 
 ## License
 
-This project copies its licensing from the Linux kernel.
-
-See [`COPYING`](./COPYING) for more information.
+This project is licensed under GPL-2.0 with the Linux-syscall-note exception,
+the same license as the Linux kernel. See [`COPYING`](./COPYING) for details.
+All contributions are subject to this license.
