@@ -1302,7 +1302,7 @@ static bool nvme_qos_is_high_prio(struct request *req)
 }
 
 /*
- * nvme_qos_update_tokens - Refill the High Priority token bucket based on time
+ * nvme_qos_update_tokens - Refill High and Normal Priority token bucket based on time
  * @nvmeq: The NVMe queue to update
  *
  * Calculates time delta since last refill in jiffies and adds tokens
@@ -1315,28 +1315,29 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 	unsigned long now = jiffies;
 	unsigned long delta = now - nvmeq->last_refill_jiffies;
 	unsigned int high_rate = nvmeq->dev->qos_high_weight;
-	unsigned int normal_rate = 1;
-	unsigned int cap = nvmeq->dev->qos_burst_cap;
+	unsigned int normal_rate = 10 - high_rate;
+	unsigned int burst_window = nvmeq->dev->qos_burst_cap;
+	unsigned int high_cap = high_rate * burst_window;
+	unsigned int normal_cap = normal_rate * burst_window;
 
 	if (!delta)
 		return;
 
 	nvmeq->last_refill_jiffies = now;
 
-	if (nvmeq->high_tokens < cap) {
+	if (nvmeq->high_tokens < high_cap) {
 		s64 new_tokens = (s64)delta * high_rate;
 		nvmeq->high_tokens += new_tokens;
-		if (nvmeq->high_tokens > cap)
-			nvmeq->high_tokens = cap;
+		if (nvmeq->high_tokens > high_cap)
+			nvmeq->high_tokens = high_cap;
 	}
 
-	if (nvmeq->normal_tokens < cap) {
+	if (nvmeq->normal_tokens < normal_cap) {
 		s64 new_tokens = (s64)delta * normal_rate;
 		nvmeq->normal_tokens += new_tokens;
-		if (nvmeq->normal_tokens > cap)
-			nvmeq->normal_tokens = cap;
+		if (nvmeq->normal_tokens > normal_cap)
+			nvmeq->normal_tokens = normal_cap;
 	}
-
 }
 
 /**
@@ -1368,14 +1369,12 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_h
 	}
 
 	if (normal_pending) {
-		if (nvmeq->normal_tokens > 0 || !high_pending) {
-			req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
+		req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
 			list_del_init(&req->queuelist);
 			if (nvmeq->normal_tokens > 0)
 				nvmeq->normal_tokens--;
 			*is_high = false;
 			return req;
-		}
 	}
 
 	return NULL;
@@ -4213,7 +4212,7 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 	dev->qos_bypass_exit_threshold = 2;
 	dev->qos_bypass_enter_ms = 5;
 	dev->qos_bypass_exit_ms = 0;
-	dev->qos_burst_cap = dev->qos_high_weight * (HZ / 10);
+	dev->qos_burst_cap = HZ / 10;
 #endif
 
 	return dev;
