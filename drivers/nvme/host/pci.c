@@ -1558,10 +1558,10 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 		return ret;
 
 #ifdef CONFIG_NVME_QOS
-	/* 
-     * Make sure the qos_node is initialized before adding it to the prio list.
-     * Do this before bypass so that nvme_pci_complete_rq works everytime
-     */
+	/*
+	 * Make sure the qos_node is initialized before adding it to the prio list.
+	 * Do this before bypass so that nvme_pci_complete_rq works everytime
+	 */
 	INIT_LIST_HEAD(&iod->qos_node);
 
 	/* Bypass QoS if disabled */
@@ -1766,8 +1766,8 @@ static void nvme_pci_complete_rq(struct request *req)
 {
 	/* Make sure the qos_node is unlinked in the event of a cancel/timeout/etc. */
 	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
-	list_del_init(&iod->qos_node);
 
+	list_del_init(&iod->qos_node);
 	nvme_pci_unmap_rq(req);
 	nvme_complete_rq(req);
 }
