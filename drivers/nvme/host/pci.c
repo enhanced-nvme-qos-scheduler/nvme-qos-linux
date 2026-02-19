@@ -192,8 +192,10 @@ struct nvme_dev {
 	unsigned int nr_write_queues;
 	unsigned int nr_poll_queues;
 
+#ifdef CONFIG_NVME_QOS
 	unsigned int qos_enabled;
 	unsigned int qos_high_weight;
+#endif
 
 	struct nvme_descriptor_pools descriptor_pools[];
 };
@@ -226,7 +228,7 @@ static inline struct nvme_dev *to_nvme_dev(struct nvme_ctrl *ctrl)
 struct nvme_queue {
 	struct nvme_dev *dev;
 	struct nvme_descriptor_pools descriptor_pools;
-	spinlock_t sq_lock;
+	spinlock_t sq_lock; /* IRQ-safe: acquired from nvme_qos_kick() in hard IRQ */
 	void *sq_cmds;
 	 /* only used for poll queues: */
 	spinlock_t cq_poll_lock ____cacheline_aligned_in_smp;
@@ -252,10 +254,13 @@ struct nvme_queue {
 	__le32 *dbbuf_sq_ei;
 	__le32 *dbbuf_cq_ei;
 	struct completion delete_done;
+#ifdef CONFIG_NVME_QOS
 	struct list_head high_prio_list;
 	struct list_head normal_prio_list;
 	int high_credits;
 	int normal_credits;
+	atomic_t in_flight;
+#endif
 };
 
 /* bits for iod->flags */
@@ -591,14 +596,39 @@ static inline void nvme_sq_copy_cmd(struct nvme_queue *nvmeq,
 		nvmeq->sq_tail = 0;
 }
 
+#ifdef CONFIG_NVME_QOS
+/*
+ * nvme_sq_submit_cmd - Copy a command to the SQ and track it in in_flight.
+ *
+ * Every command placed on the SQ must be tracked so the completion path
+ * can safely decrement in_flight and QoS dispatch can avoid SQ overflow.
+ * Bundling both operations here makes it impossible to forget the
+ * accounting.  Must be called with sq_lock held.
+ */
+static inline void nvme_sq_submit_cmd(struct nvme_queue *nvmeq,
+				      struct nvme_command *cmd)
+{
+	nvme_sq_copy_cmd(nvmeq, cmd);
+	atomic_inc(&nvmeq->in_flight);
+}
+#endif
+
 static void nvme_commit_rqs(struct blk_mq_hw_ctx *hctx)
 {
 	struct nvme_queue *nvmeq = hctx->driver_data;
+#ifdef CONFIG_NVME_QOS
+	unsigned long flags;
 
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
+	if (nvmeq->sq_tail != nvmeq->last_sq_tail)
+		nvme_write_sq_db(nvmeq, true);
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+#else
 	spin_lock(&nvmeq->sq_lock);
 	if (nvmeq->sq_tail != nvmeq->last_sq_tail)
 		nvme_write_sq_db(nvmeq, true);
 	spin_unlock(&nvmeq->sq_lock);
+#endif
 }
 
 enum nvme_use_sgl {
@@ -1179,6 +1209,87 @@ out_free_cmd:
 	return ret;
 }
 
+#ifdef CONFIG_NVME_QOS
+
+/*
+ * Drain pending QoS requests to hardware.
+ * Called with sq_lock held.
+ */
+static int nvme_qos_drain_queue_locked(struct nvme_queue *nvmeq)
+{
+	struct request *req;
+	struct nvme_iod *iod;
+	int submitted = 0;
+
+	while (!list_empty(&nvmeq->high_prio_list)) {
+		req = list_first_entry(&nvmeq->high_prio_list,
+				       struct request, queuelist);
+		list_del_init(&req->queuelist);
+		iod = blk_mq_rq_to_pdu(req);
+		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+		submitted++;
+	}
+
+	while (!list_empty(&nvmeq->normal_prio_list)) {
+		req = list_first_entry(&nvmeq->normal_prio_list,
+				       struct request, queuelist);
+		list_del_init(&req->queuelist);
+		iod = blk_mq_rq_to_pdu(req);
+		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+		submitted++;
+	}
+
+	return submitted;
+}
+
+/*
+ * Drain all pending QoS requests from all I/O queues.
+ * Called when QoS is disabled at runtime.
+ */
+static void nvme_qos_drain_all_queues(struct nvme_dev *dev)
+{
+	unsigned int i;
+	int total = 0;
+
+	/* Skip admin queue (qid 0), drain I/O queues (1 to online_queues-1) */
+	for (i = 1; i < dev->online_queues; i++) {
+		struct nvme_queue *nvmeq = &dev->queues[i];
+		unsigned long flags;
+		int drained;
+
+		spin_lock_irqsave(&nvmeq->sq_lock, flags);
+		drained = nvme_qos_drain_queue_locked(nvmeq);
+		if (drained > 0)
+			nvme_write_sq_db(nvmeq, true);
+		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+		total += drained;
+	}
+
+	if (total > 0)
+		dev_info(dev->dev, "NVMe QoS: drained %d pending requests\n",
+			 total);
+}
+
+#define NVME_QOS_MAX_BATCH 4
+
+static bool nvme_qos_is_high_prio(struct request *req)
+{
+	struct nvme_ns *ns = req->q->queuedata;
+	unsigned int policy;
+	unsigned short prio;
+
+	if (ns) {
+		policy = READ_ONCE(ns->qos_policy);
+		if (policy == NVME_QOS_FORCE_HIGH)
+			return true;
+		if (policy == NVME_QOS_FORCE_NORMAL)
+			return false;
+	}
+
+	prio = req->bio ? req->bio->bi_ioprio : IOPRIO_CLASS_BE;
+	return IOPRIO_PRIO_CLASS(prio) == IOPRIO_CLASS_RT;
+}
+
 static void nvme_qos_refill_credits(struct nvme_queue *nvmeq)
 {
 	nvmeq->high_credits = nvmeq->dev->qos_high_weight;
@@ -1194,7 +1305,8 @@ static struct nvme_iod *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 
 	/* Service High Priority */
 	if (nvmeq->high_credits > 0 && !list_empty(&nvmeq->high_prio_list)) {
-        iod = list_first_entry(&nvmeq->high_prio_list, struct nvme_iod, qos_node);
+        iod = list_first_entry(&nvmeq->high_prio_list,
+					struct nvme_iod, qos_node);
         list_del_init(&iod->qos_node);
 		nvmeq->high_credits--;
         return iod;
@@ -1202,7 +1314,8 @@ static struct nvme_iod *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 
 	/* Service Normal Priority */
 	if (nvmeq->normal_credits > 0 && !list_empty(&nvmeq->normal_prio_list)) {
-        iod = list_first_entry(&nvmeq->normal_prio_list, struct nvme_iod, qos_node);
+        iod = list_first_entry(&nvmeq->normal_prio_list,
+					struct nvme_iod, qos_node);
         list_del_init(&iod->qos_node);
 		nvmeq->normal_credits--;
         return iod;
@@ -1224,6 +1337,70 @@ static struct nvme_iod *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 	return NULL;
 }
 
+/*
+ * nvme_qos_dispatch - Submit pending QoS requests via WRR scheduling
+ * @nvmeq: The NVMe queue to dispatch from
+ * @commit: Whether to ring the doorbell after submitting commands.
+ *          Pass bd->last from queue_rq to batch doorbells with blk-mq,
+ *          or true from kick/submit_batch to ring immediately.
+ *
+ * Dequeues up to NVME_QOS_MAX_BATCH requests from the priority lists using
+ * weighted round-robin and copies their commands to the SQ. Writes the SQ
+ * doorbell once if any requests were submitted and @commit is true.
+ *
+ * Must be called with sq_lock held.
+ */
+static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
+{
+	unsigned int depth = nvmeq->q_depth - 1;
+	unsigned int submitted = 0;
+
+	while (submitted < NVME_QOS_MAX_BATCH) {
+		unsigned int in_flight = atomic_read(&nvmeq->in_flight);
+		struct nvme_iod *iod;
+
+		if (in_flight >= depth)
+			break;
+
+		iod = nvme_qos_dequeue_wrr(nvmeq);
+		if (!iod)
+			break;
+
+		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+		submitted++;
+	}
+
+	if (submitted)
+		nvme_write_sq_db(nvmeq, commit);
+}
+
+/*
+ * nvme_qos_kick - Drain pending QoS requests when SQ slots become available
+ * @nvmeq: The NVMe queue to drain
+ *
+ * Called from completion path (IRQ or poll) to submit requests that were
+ * queued in the priority lists when the SQ was full. This ensures requests
+ * don't stall waiting for new submissions to trigger draining.
+ *
+ * Must not be called with sq_lock held.
+ */
+static void nvme_qos_kick(struct nvme_queue *nvmeq)
+{
+	unsigned long flags;
+
+	if (!nvmeq->dev->qos_enabled)
+		return;
+
+	/* Quick check without lock - if both lists appear empty, skip */
+	if (list_empty(&nvmeq->high_prio_list) &&
+	    list_empty(&nvmeq->normal_prio_list))
+		return;
+
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
+	nvme_qos_dispatch(nvmeq, true);
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+}
+#endif /* CONFIG_NVME_QOS */
 
 static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 			 const struct blk_mq_queue_data *bd)
@@ -1232,10 +1409,10 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	struct nvme_dev *dev = nvmeq->dev;
 	struct request *req = bd->rq;
 	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
-	struct nvme_ns *ns = req->q->queuedata;
 	blk_status_t ret;
-	bool is_high_prio = false;
-	unsigned short prio;
+#ifdef CONFIG_NVME_QOS
+	unsigned long flags;
+#endif
 
 	if (unlikely(!test_bit(NVMEQ_ENABLED, &nvmeq->flags)))
 		return BLK_STS_IOERR;
@@ -1247,6 +1424,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (unlikely(ret))
 		return ret;
 
+#ifdef CONFIG_NVME_QOS
 	/* 
      * Make sure the qos_node is initialized before adding it to the prio list.
      * Do this before bypass so that nvme_pci_complete_rq works everytime
@@ -1255,50 +1433,37 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	/* Bypass QoS if disabled */
 	if (unlikely(dev->qos_enabled == 0)) {
-		spin_lock(&nvmeq->sq_lock);
-		nvme_sq_copy_cmd(nvmeq, &iod->cmd);
-		nvme_write_sq_db(nvmeq, true);
-		spin_unlock(&nvmeq->sq_lock);
+		spin_lock_irqsave(&nvmeq->sq_lock, flags);
+		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+		nvme_write_sq_db(nvmeq, bd->last);
+		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 		return BLK_STS_OK;
 	}
 
-	spin_lock(&nvmeq->sq_lock);
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
 
-	/* Classification */
-	prio = req->bio ? req->bio->bi_ioprio : IOPRIO_CLASS_BE;
-
-	unsigned int current_policy = 0;
-
-	if (ns)
-		current_policy = READ_ONCE(ns->qos_policy);
-
-	if (current_policy == NVME_QOS_FORCE_HIGH) {
-		is_high_prio = true;
-	} else if (current_policy == NVME_QOS_FORCE_NORMAL) {
-		is_high_prio = false;
-	} else if (IOPRIO_PRIO_CLASS(prio) == IOPRIO_CLASS_RT) {
-		is_high_prio = true;
+	/* Re-check QoS flag under lock to handle disable race */
+	if (unlikely(!READ_ONCE(dev->qos_enabled))) {
+		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+		nvme_write_sq_db(nvmeq, bd->last);
+		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+		return BLK_STS_OK;
 	}
 
-	/* Enqueue */
-	if (is_high_prio)
+	/* Classify and Enqueue */
+	if (nvme_qos_is_high_prio(req))
 		list_add_tail(&iod->qos_node, &nvmeq->high_prio_list);
 	else
 		list_add_tail(&iod->qos_node, &nvmeq->normal_prio_list);
 
-	/* Dispatch Loop */
-	while (true) {
-		struct nvme_iod *next_iod;
-
-		next_iod = nvme_qos_dequeue_wrr(nvmeq);
-		if (!next_iod)
-			break;
-
-		nvme_sq_copy_cmd(nvmeq, &next_iod->cmd);
-	}
-
-	nvme_write_sq_db(nvmeq, true);
+	nvme_qos_dispatch(nvmeq, bd->last);
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+#else
+	spin_lock(&nvmeq->sq_lock);
+	nvme_sq_copy_cmd(nvmeq, &iod->cmd);
+	nvme_write_sq_db(nvmeq, bd->last);
 	spin_unlock(&nvmeq->sq_lock);
+#endif /* CONFIG_NVME_QOS */
 
 	return BLK_STS_OK;
 }
@@ -1306,10 +1471,23 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 static void nvme_submit_cmds(struct nvme_queue *nvmeq, struct rq_list *rqlist)
 {
 	struct request *req;
+#ifdef CONFIG_NVME_QOS
+	unsigned long flags;
+#endif
 
 	if (rq_list_empty(rqlist))
 		return;
 
+#ifdef CONFIG_NVME_QOS
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
+	while ((req = rq_list_pop(rqlist))) {
+		struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
+
+		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+	}
+	nvme_write_sq_db(nvmeq, true);
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+#else
 	spin_lock(&nvmeq->sq_lock);
 	while ((req = rq_list_pop(rqlist))) {
 		struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
@@ -1318,7 +1496,53 @@ static void nvme_submit_cmds(struct nvme_queue *nvmeq, struct rq_list *rqlist)
 	}
 	nvme_write_sq_db(nvmeq, true);
 	spin_unlock(&nvmeq->sq_lock);
+#endif
 }
+
+#ifdef CONFIG_NVME_QOS
+/*
+ * nvme_qos_submit_batch - QoS-aware batch submission
+ * @nvmeq: The NVMe queue to submit to
+ * @rqlist: List of prepared requests to submit
+ *
+ * Classifies each request in the batch into High or Normal priority lists,
+ * then dispatches via WRR scheduling. Falls back to direct SQ submission
+ * if QoS is disabled under the lock (handles disable race).
+ */
+static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
+				   struct rq_list *rqlist)
+{
+	unsigned long flags;
+	struct request *req;
+
+	if (rq_list_empty(rqlist))
+		return;
+
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
+
+	/* Re-check under lock to handle disable race */
+	if (unlikely(!READ_ONCE(nvmeq->dev->qos_enabled))) {
+		while ((req = rq_list_pop(rqlist))) {
+			struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
+
+			nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+		}
+		nvme_write_sq_db(nvmeq, true);
+		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+		return;
+	}
+
+	while ((req = rq_list_pop(rqlist))) {
+		if (nvme_qos_is_high_prio(req))
+			list_add_tail(&req->queuelist, &nvmeq->high_prio_list);
+		else
+			list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
+	}
+
+	nvme_qos_dispatch(nvmeq, true);
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+}
+#endif /* CONFIG_NVME_QOS */
 
 static bool nvme_prep_rq_batch(struct nvme_queue *nvmeq, struct request *req)
 {
@@ -1342,8 +1566,17 @@ static void nvme_queue_rqs(struct rq_list *rqlist)
 	struct request *req;
 
 	while ((req = rq_list_pop(rqlist))) {
+#ifdef CONFIG_NVME_QOS
+		if (nvmeq && nvmeq != req->mq_hctx->driver_data) {
+			if (nvmeq->dev->qos_enabled)
+				nvme_qos_submit_batch(nvmeq, &submit_list);
+			else
+				nvme_submit_cmds(nvmeq, &submit_list);
+		}
+#else
 		if (nvmeq && nvmeq != req->mq_hctx->driver_data)
 			nvme_submit_cmds(nvmeq, &submit_list);
+#endif
 		nvmeq = req->mq_hctx->driver_data;
 
 		if (nvme_prep_rq_batch(nvmeq, req))
@@ -1352,8 +1585,17 @@ static void nvme_queue_rqs(struct rq_list *rqlist)
 			rq_list_add_tail(&requeue_list, req);
 	}
 
+#ifdef CONFIG_NVME_QOS
+	if (nvmeq) {
+		if (nvmeq->dev->qos_enabled)
+			nvme_qos_submit_batch(nvmeq, &submit_list);
+		else
+			nvme_submit_cmds(nvmeq, &submit_list);
+	}
+#else
 	if (nvmeq)
 		nvme_submit_cmds(nvmeq, &submit_list);
+#endif
 	*rqlist = requeue_list;
 }
 
@@ -1418,6 +1660,9 @@ static inline void nvme_handle_cqe(struct nvme_queue *nvmeq,
 	 * for them but rather special case them here.
 	 */
 	if (unlikely(nvme_is_aen_req(nvmeq->qid, command_id))) {
+#ifdef CONFIG_NVME_QOS
+		atomic_dec(&nvmeq->in_flight);
+#endif
 		nvme_complete_async_event(&nvmeq->dev->ctrl,
 				cqe->status, &cqe->result);
 		return;
@@ -1431,6 +1676,9 @@ static inline void nvme_handle_cqe(struct nvme_queue *nvmeq,
 		return;
 	}
 
+#ifdef CONFIG_NVME_QOS
+	atomic_dec(&nvmeq->in_flight);
+#endif
 	trace_nvme_sq(req, cqe->sq_head, nvmeq->sq_tail);
 	if (!nvme_try_complete_req(req, cqe->status, cqe->result) &&
 	    !blk_mq_add_to_batch(req, iob,
@@ -1480,6 +1728,9 @@ static irqreturn_t nvme_irq(int irq, void *data)
 	if (nvme_poll_cq(nvmeq, &iob)) {
 		if (!rq_list_empty(&iob.req_list))
 			nvme_pci_complete_batch(&iob);
+#ifdef CONFIG_NVME_QOS
+		nvme_qos_kick(nvmeq);
+#endif
 		return IRQ_HANDLED;
 	}
 	return IRQ_NONE;
@@ -1523,6 +1774,11 @@ static int nvme_poll(struct blk_mq_hw_ctx *hctx, struct io_comp_batch *iob)
 	found = nvme_poll_cq(nvmeq, iob);
 	spin_unlock(&nvmeq->cq_poll_lock);
 
+#ifdef CONFIG_NVME_QOS
+	if (found)
+		nvme_qos_kick(nvmeq);
+#endif
+
 	return found;
 }
 
@@ -1531,14 +1787,24 @@ static void nvme_pci_submit_async_event(struct nvme_ctrl *ctrl)
 	struct nvme_dev *dev = to_nvme_dev(ctrl);
 	struct nvme_queue *nvmeq = &dev->queues[0];
 	struct nvme_command c = { };
+#ifdef CONFIG_NVME_QOS
+	unsigned long flags;
+#endif
 
 	c.common.opcode = nvme_admin_async_event;
 	c.common.command_id = NVME_AQ_BLK_MQ_DEPTH;
 
+#ifdef CONFIG_NVME_QOS
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
+	nvme_sq_submit_cmd(nvmeq, &c);
+	nvme_write_sq_db(nvmeq, true);
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+#else
 	spin_lock(&nvmeq->sq_lock);
 	nvme_sq_copy_cmd(nvmeq, &c);
 	nvme_write_sq_db(nvmeq, true);
 	spin_unlock(&nvmeq->sq_lock);
+#endif
 }
 
 static int nvme_pci_subsystem_reset(struct nvme_ctrl *ctrl)
@@ -1990,10 +2256,13 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 	spin_lock_init(&nvmeq->sq_lock);
 	spin_lock_init(&nvmeq->cq_poll_lock);
 
+#ifdef CONFIG_NVME_QOS
 	INIT_LIST_HEAD(&nvmeq->high_prio_list);
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
 	nvmeq->high_credits = 9;
 	nvmeq->normal_credits = 1;
+	atomic_set(&nvmeq->in_flight, 0);
+#endif
 
 	nvmeq->cq_head = 0;
 	nvmeq->cq_phase = 1;
@@ -2035,6 +2304,22 @@ static void nvme_init_queue(struct nvme_queue *nvmeq, u16 qid)
 	nvmeq->q_db = &dev->dbs[qid * 2 * dev->db_stride];
 	memset((void *)nvmeq->cqes, 0, CQ_SIZE(nvmeq));
 	nvme_dbbuf_init(dev, nvmeq, qid);
+
+#ifdef CONFIG_NVME_QOS
+	/*
+	 * Reset QoS state.  After a device reset the old SQ is gone, so
+	 * in_flight must restart at zero.  Any requests that were parked
+	 * on the priority lists have already been cancelled by the
+	 * blk-mq tag-walk in the reset path; reinitialising the list
+	 * heads drops the stale (freed) entries.
+	 */
+	INIT_LIST_HEAD(&nvmeq->high_prio_list);
+	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
+	nvmeq->high_credits = dev->qos_high_weight;
+	nvmeq->normal_credits = 1;
+	atomic_set(&nvmeq->in_flight, 0);
+#endif
+
 	dev->online_queues++;
 	wmb(); /* ensure the first interrupt sees the initialization */
 }
@@ -2649,6 +2934,7 @@ static ssize_t hmb_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RW(hmb);
 
+#ifdef CONFIG_NVME_QOS
 static ssize_t qos_enable_show(struct device *dev, struct device_attribute *attr,
 			       char *buf)
 {
@@ -2666,7 +2952,17 @@ static ssize_t qos_enable_store(struct device *dev, struct device_attribute *att
 	if (kstrtobool(buf, &enable) < 0)
 		return -EINVAL;
 
-	ndev->qos_enabled = enable;
+	/* When disabling QoS, drain pending requests first */
+	if (!enable && ndev->qos_enabled) {
+		// Set flag first to prevent new enqueues and
+		// ensure flag visible before drain
+		WRITE_ONCE(ndev->qos_enabled, 0);
+		smp_mb();
+		nvme_qos_drain_all_queues(ndev);
+	} else {
+		WRITE_ONCE(ndev->qos_enabled, enable);
+	}
+
 	dev_info(dev, "NVMe QoS Scheduler: %s\n", enable ? "ENABLED" : "DISABLED");
 	return count;
 }
@@ -2697,6 +2993,7 @@ static ssize_t qos_weight_store(struct device *dev, struct device_attribute *att
 	return count;
 }
 static DEVICE_ATTR_RW(qos_weight);
+#endif /* CONFIG_NVME_QOS */
 
 static umode_t nvme_pci_attrs_are_visible(struct kobject *kobj,
 		struct attribute *a, int n)
@@ -2722,8 +3019,10 @@ static struct attribute *nvme_pci_attrs[] = {
 	&dev_attr_cmbloc.attr,
 	&dev_attr_cmbsz.attr,
 	&dev_attr_hmb.attr,
+#ifdef CONFIG_NVME_QOS
 	&dev_attr_qos_enable.attr,
 	&dev_attr_qos_weight.attr,
+#endif
 	NULL,
 };
 
@@ -3578,8 +3877,10 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 	dev->ctrl.max_segments = NVME_MAX_SEGS;
 	dev->ctrl.max_integrity_segments = 1;
 
+#ifdef CONFIG_NVME_QOS
 	dev->qos_enabled = 0;
 	dev->qos_high_weight = 9;
+#endif
 
 	return dev;
 
