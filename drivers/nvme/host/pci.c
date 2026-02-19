@@ -1225,24 +1225,21 @@ out_free_cmd:
  */
 static int nvme_qos_drain_queue_locked(struct nvme_queue *nvmeq)
 {
-	struct request *req;
 	struct nvme_iod *iod;
 	int submitted = 0;
 
 	while (!list_empty(&nvmeq->high_prio_list)) {
-		req = list_first_entry(&nvmeq->high_prio_list,
-				       struct request, queuelist);
-		list_del_init(&req->queuelist);
-		iod = blk_mq_rq_to_pdu(req);
+		iod = list_first_entry(&nvmeq->high_prio_list,
+				       struct nvme_iod, qos_node);
+		list_del_init(&iod->qos_node);
 		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
 		submitted++;
 	}
 
 	while (!list_empty(&nvmeq->normal_prio_list)) {
-		req = list_first_entry(&nvmeq->normal_prio_list,
-				       struct request, queuelist);
-		list_del_init(&req->queuelist);
-		iod = blk_mq_rq_to_pdu(req);
+		iod = list_first_entry(&nvmeq->normal_prio_list,
+				       struct nvme_iod, qos_node);
+		list_del_init(&iod->qos_node);
 		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
 		submitted++;
 	}
@@ -1330,19 +1327,19 @@ static struct nvme_iod *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_
 
 	/* Service High Priority */
 	if (nvmeq->high_credits > 0 && !list_empty(&nvmeq->high_prio_list)) {
-        iod = list_first_entry(&nvmeq->high_prio_list,
+		iod = list_first_entry(&nvmeq->high_prio_list,
 					struct nvme_iod, qos_node);
-        list_del_init(&iod->qos_node);
+		list_del_init(&iod->qos_node);
 		nvmeq->high_credits--;
 		*is_high = true;
-        return iod;
+		return iod;
 	}
 
 	/* Service Normal Priority */
 	if (nvmeq->normal_credits > 0 && !list_empty(&nvmeq->normal_prio_list)) {
-        iod = list_first_entry(&nvmeq->normal_prio_list,
+		iod = list_first_entry(&nvmeq->normal_prio_list,
 					struct nvme_iod, qos_node);
-        list_del_init(&iod->qos_node);
+		list_del_init(&iod->qos_node);
 		nvmeq->normal_credits--;
 		*is_high = false;
 		return iod;
@@ -1688,10 +1685,11 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 	}
 
 	while ((req = rq_list_pop(rqlist))) {
+		struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
 		if (nvme_qos_is_high_prio(req))
-			list_add_tail(&req->queuelist, &nvmeq->high_prio_list);
+			list_add_tail(&iod->qos_node, &nvmeq->high_prio_list);
 		else
-			list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
+			list_add_tail(&iod->qos_node, &nvmeq->normal_prio_list);
 	}
 
 	nvme_qos_dispatch(nvmeq, true);
