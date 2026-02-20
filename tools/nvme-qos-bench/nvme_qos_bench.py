@@ -226,6 +226,168 @@ def _color_change(pct_change: float) -> str:
     return change_str
 
 
+def _store_baseline_results(
+    baseline_results: List[Dict],
+    baseline_normal: List[Dict],
+    results: Dict,
+    depth: int,
+    weight: int,
+    workload_type: Optional[str],
+    buf_tag: str,
+    elapsed: float,
+) -> Optional[str]:
+    """Aggregate baseline iterations and store in results dict. Returns summary line for progress.finish()."""
+    if not baseline_results:
+        return None
+
+    degraded = detect_degraded_iterations(baseline_results)
+    avg_bl = _aggregate_iterations(baseline_results)
+    avg_bl_norm = _aggregate_iterations(baseline_normal) if baseline_normal else {}
+
+    bl_config = {
+        "qos_enabled": False,
+        "iodepth": depth,
+        "paired_weight": weight,
+    }
+    if workload_type:
+        bl_config["workload"] = workload_type
+
+    result = {
+        "config": bl_config,
+        "metrics": avg_bl,
+        "iterations": baseline_results,
+    }
+    if avg_bl_norm:
+        result["normal_metrics"] = avg_bl_norm
+    if degraded:
+        result["degraded_iterations"] = degraded
+    results["baseline"].append(result)
+    results["all"].append(result)
+
+    degraded_list = degraded if degraded else None
+    bl_label = f"baseline {buf_tag}qd={depth:<3}"
+    return _format_summary_line(bl_label, avg_bl, elapsed, degraded=degraded_list)
+
+
+def _store_qos_results(
+    qos_results: List[Dict],
+    qos_normal: List[Dict],
+    results: Dict,
+    depth: int,
+    weight: int,
+    workload_type: Optional[str],
+    config: BenchmarkConfig,
+    kernel_stats: Optional[QoSKernelStats],
+    ks_available: bool,
+    buf_tag: str,
+    elapsed: float,
+) -> None:
+    """Aggregate QoS iterations, compute changes, collect kernel stats, and store with summary output."""
+    if not qos_results:
+        return
+
+    degraded = detect_degraded_iterations(qos_results)
+    avg_qos = _aggregate_iterations(qos_results)
+    avg_qos_norm = _aggregate_iterations(qos_normal) if qos_normal else {}
+
+    # Collect kernel counters (accumulated across QoS iterations only)
+    ks_counters = None
+    ks_fairness = None
+    if ks_available:
+        ks_counters = kernel_stats.read_aggregate()
+        if ks_counters is not None:
+            ks_fairness = QoSKernelStats.validate_fairness(
+                ks_counters, weight)
+
+    # Calculate change vs paired baseline
+    pct_change = None
+    norm_pct_change = None
+    baseline_match = next(
+        (b for b in results["baseline"]
+         if b["config"]["iodepth"] == depth
+         and b["config"].get("paired_weight") == weight
+         and b["config"].get("workload") == workload_type),
+        None
+    )
+    if baseline_match:
+        pct_change = percentage_change(
+            baseline_match["metrics"]["p99_us"],
+            avg_qos["p99_us"]
+        )
+        bl_norm = baseline_match.get("normal_metrics", {})
+        if bl_norm and avg_qos_norm and bl_norm.get("p99_us"):
+            norm_pct_change = percentage_change(
+                bl_norm["p99_us"],
+                avg_qos_norm.get("p99_us", 0)
+            )
+
+    qos_config = {
+        "qos_enabled": True,
+        "qos_weight": weight,
+        "qos_max_depth": config.qos_max_depth,
+        "iodepth": depth,
+    }
+    if workload_type:
+        qos_config["workload"] = workload_type
+
+    result = {
+        "config": qos_config,
+        "metrics": avg_qos,
+        "pct_change": pct_change,
+        "norm_pct_change": norm_pct_change,
+        "iterations": qos_results,
+    }
+    if avg_qos_norm:
+        result["normal_metrics"] = avg_qos_norm
+    if ks_counters:
+        result["kernel_stats"] = ks_counters
+    if ks_fairness:
+        result["fairness"] = ks_fairness
+    if degraded:
+        result["degraded_iterations"] = degraded
+    results["qos"].append(result)
+    results["all"].append(result)
+
+    # Print QoS summary line
+    change_str = _color_change(pct_change) if pct_change is not None else ""
+    degraded_str = f"  ({len(degraded)} degraded)" if degraded else ""
+    util_pct = avg_qos.get('io_util_pct', 0)
+    md_tag = f" md={config.qos_max_depth}" if config.qos_max_depth else ""
+    qos_label = f"qos {buf_tag}w={weight:<2}{md_tag} qd={depth:<3}"
+    line1 = (
+        f"{qos_label}: "
+        f"p50={format_us(avg_qos['p50_us']):>8} "
+        f"p90={format_us(avg_qos['p90_us']):>8} "
+        f"p99={format_us(avg_qos['p99_us']):>8} "
+        f"p999={format_us(avg_qos['p999_us']):>8} "
+        f"iops={si_format(avg_qos['iops']):>8} "
+        f"cpu={avg_qos['cpu_pct']:5.1f}% "
+        f"util={util_pct:5.1f}% "
+        f"[{elapsed:.1f}s]{change_str}{degraded_str}"
+    )
+    print(f"\r\033[K{line1}", file=sys.stderr)
+
+    # Kernel stats summary line
+    if ks_counters and ks_fairness:
+        ks_line = QoSKernelStats.format_summary(
+            ks_counters, ks_fairness)
+        print(f"{'':>24}{ks_line}", file=sys.stderr)
+
+    # Normal-priority summary line
+    if avg_qos_norm:
+        norm_change_str = ""
+        if norm_pct_change is not None:
+            norm_change_str = f" ({norm_pct_change:+.1f}%)"
+        norm_line = (
+            f"{'':>24}NORM "
+            f"p99={format_us(avg_qos_norm.get('p99_us', 0)):>8}"
+            f"{norm_change_str} "
+            f"iops={si_format(avg_qos_norm.get('iops', 0)):>8} "
+            f"bw={avg_qos_norm.get('bw_mbps', 0):>6.0f}MB/s"
+        )
+        print(norm_line, file=sys.stderr)
+
+
 def _run_interleaved_depth(
     runner: FioRunner, device: NVMeDevice, config: BenchmarkConfig,
     depth: int, weight: int, cpus_allowed: Optional[str],
@@ -322,139 +484,19 @@ def _run_interleaved_depth(
 
     elapsed = progress.elapsed()
 
-    # --- Post-loop: aggregate and store baseline ---
-    if baseline_results:
-        degraded = detect_degraded_iterations(baseline_results)
-        avg_bl = _aggregate_iterations(baseline_results)
-        avg_bl_norm = _aggregate_iterations(baseline_normal) if baseline_normal else {}
+    # --- Post-loop: aggregate and store results ---
+    bl_line = _store_baseline_results(
+        baseline_results, baseline_normal, results,
+        depth, weight, workload_type, buf_tag, elapsed
+    )
+    if bl_line:
+        progress.finish(bl_line)
 
-        bl_config = {
-            "qos_enabled": False,
-            "iodepth": depth,
-            "paired_weight": weight,
-        }
-        if workload_type:
-            bl_config["workload"] = workload_type
-
-        result = {
-            "config": bl_config,
-            "metrics": avg_bl,
-            "iterations": baseline_results,
-        }
-        if avg_bl_norm:
-            result["normal_metrics"] = avg_bl_norm
-        if degraded:
-            result["degraded_iterations"] = degraded
-        results["baseline"].append(result)
-        results["all"].append(result)
-
-        degraded_list = degraded if degraded else None
-        bl_label = f"baseline {buf_tag}qd={depth:<3}"
-        line = _format_summary_line(bl_label, avg_bl, elapsed, degraded=degraded_list)
-        progress.finish(line)
-
-    # --- Post-loop: aggregate and store QoS ---
-    if qos_results:
-        degraded = detect_degraded_iterations(qos_results)
-        avg_qos = _aggregate_iterations(qos_results)
-        avg_qos_norm = _aggregate_iterations(qos_normal) if qos_normal else {}
-
-        # Collect kernel counters (accumulated across QoS iterations only)
-        ks_counters = None
-        ks_fairness = None
-        if ks_available:
-            ks_counters = kernel_stats.read_aggregate()
-            if ks_counters is not None:
-                ks_fairness = QoSKernelStats.validate_fairness(
-                    ks_counters, weight)
-
-        # Calculate change vs paired baseline
-        pct_change = None
-        norm_pct_change = None
-        baseline_match = next(
-            (b for b in results["baseline"]
-             if b["config"]["iodepth"] == depth
-             and b["config"].get("paired_weight") == weight
-             and b["config"].get("workload") == workload_type),
-            None
-        )
-        if baseline_match:
-            pct_change = percentage_change(
-                baseline_match["metrics"]["p99_us"],
-                avg_qos["p99_us"]
-            )
-            bl_norm = baseline_match.get("normal_metrics", {})
-            if bl_norm and avg_qos_norm and bl_norm.get("p99_us"):
-                norm_pct_change = percentage_change(
-                    bl_norm["p99_us"],
-                    avg_qos_norm.get("p99_us", 0)
-                )
-
-        qos_config = {
-            "qos_enabled": True,
-            "qos_weight": weight,
-            "qos_max_depth": config.qos_max_depth,
-            "iodepth": depth,
-        }
-        if workload_type:
-            qos_config["workload"] = workload_type
-
-        result = {
-            "config": qos_config,
-            "metrics": avg_qos,
-            "pct_change": pct_change,
-            "norm_pct_change": norm_pct_change,
-            "iterations": qos_results,
-        }
-        if avg_qos_norm:
-            result["normal_metrics"] = avg_qos_norm
-        if ks_counters:
-            result["kernel_stats"] = ks_counters
-        if ks_fairness:
-            result["fairness"] = ks_fairness
-        if degraded:
-            result["degraded_iterations"] = degraded
-        results["qos"].append(result)
-        results["all"].append(result)
-
-        # Print QoS summary line
-        change_str = _color_change(pct_change) if pct_change is not None else ""
-        degraded_str = f"  ({len(degraded)} degraded)" if degraded else ""
-        util_pct = avg_qos.get('io_util_pct', 0)
-        md_tag = f" md={config.qos_max_depth}" if config.qos_max_depth else ""
-        qos_label = f"qos {buf_tag}w={weight:<2}{md_tag} qd={depth:<3}"
-        line1 = (
-            f"{qos_label}: "
-            f"p50={format_us(avg_qos['p50_us']):>8} "
-            f"p90={format_us(avg_qos['p90_us']):>8} "
-            f"p99={format_us(avg_qos['p99_us']):>8} "
-            f"p999={format_us(avg_qos['p999_us']):>8} "
-            f"iops={si_format(avg_qos['iops']):>8} "
-            f"cpu={avg_qos['cpu_pct']:5.1f}% "
-            f"util={util_pct:5.1f}% "
-            f"[{elapsed:.1f}s]{change_str}{degraded_str}"
-        )
-        print(f"\r\033[K{line1}", file=sys.stderr)
-
-        # Kernel stats summary line
-        if ks_counters and ks_fairness:
-            ks_line = QoSKernelStats.format_summary(
-                ks_counters, ks_fairness)
-            print(f"{'':>24}{ks_line}", file=sys.stderr)
-
-        # Normal-priority summary line
-        if avg_qos_norm:
-            norm_change_str = ""
-            if norm_pct_change is not None:
-                norm_change_str = f" ({norm_pct_change:+.1f}%)"
-            norm_line = (
-                f"{'':>24}NORM "
-                f"p99={format_us(avg_qos_norm.get('p99_us', 0)):>8}"
-                f"{norm_change_str} "
-                f"iops={si_format(avg_qos_norm.get('iops', 0)):>8} "
-                f"bw={avg_qos_norm.get('bw_mbps', 0):>6.0f}MB/s"
-            )
-            print(norm_line, file=sys.stderr)
+    _store_qos_results(
+        qos_results, qos_normal, results,
+        depth, weight, workload_type, config,
+        kernel_stats, ks_available, buf_tag, elapsed
+    )
 
 
 def run_benchmark_suite(
@@ -1276,92 +1318,196 @@ def cmd_validate(args) -> int:
     return 0 if all_pass else 1
 
 
-def cmd_run(args) -> int:
-    """Run benchmark suite."""
-    # Check root
+def _check_prerequisites() -> Optional[str]:
+    """Check root access and fio availability. Returns error message or None."""
     if os.geteuid() != 0:
-        print(colored("Error: Must run as root for sysfs access and direct I/O", "red"),
-              file=sys.stderr)
-        return 1
-
-    # Check fio
+        return "Must run as root for sysfs access and direct I/O"
     if not check_fio_available():
-        print(colored("Error: fio not found. Install with: apt install fio", "red"),
-              file=sys.stderr)
-        return 1
+        return "fio not found. Install with: apt install fio"
+    return None
 
-    # Load preferences
-    prefs = UserPreferences.load()
 
-    # Select device
-    device_name = select_device(args, prefs)
-    if not device_name:
-        return 1
+def _print_condition_diagnostics(condition_profile, config, hw_queues):
+    """Print condition profile diagnostics and warnings."""
+    active = config.max_queues or hw_queues
+    total = config.high_numjobs + config.normal_numjobs
+    print(f"Condition {condition_profile.id}: {condition_profile.name}", file=sys.stderr)
+    print(f"  {condition_profile.description}", file=sys.stderr)
+    print(f"  HW queues: {hw_queues}, active: {active}, "
+          f"jobs: {config.high_numjobs}+{config.normal_numjobs} "
+          f"({total / active:.1f}/q)", file=sys.stderr)
 
-    device = NVMeDevice(device_name)
+    # Per-queue write bytes diagnostic
+    pqwb_parts = []
+    for d in condition_profile.depths:
+        b = condition_profile.per_queue_write_bytes(d)
+        pqwb_parts.append(f"{b / (1024**2):.1f} MB @ QD{d}")
 
-    # Baseline overhead check (separate fast path)
-    if args.baseline:
-        return cmd_run_baseline(device, args)
+    if pqwb_parts:
+        pqwb_line = ", ".join(pqwb_parts)
+        print(f"  Per-queue write bytes: {pqwb_line}", file=sys.stderr)
+        max_bytes = max(condition_profile.per_queue_write_bytes(d) for d in condition_profile.depths)
+        if max_bytes > 256 * 1024**2:
+            print(colored("  WARNING: per-queue writes exceed 256 MB -- device FTL/GC will dominate", "red"),
+                  file=sys.stderr)
+        elif max_bytes > 128 * 1024**2:
+            print(colored("  WARNING: per-queue writes exceed 128 MB -- may reduce scheduler visibility", "yellow"),
+                  file=sys.stderr)
 
-    # Load config -- condition profiles take priority
-    condition_profile = None
-    if args.condition:
-        try:
-            condition_profile = get_condition(args.condition)
-        except KeyError as e:
-            print(colored(f"Error: {e}", "red"), file=sys.stderr)
-            return 1
-        hw_queues = device.get_hw_queue_count()
-        config = condition_profile.resolve(hw_queues)
 
-        # Print resolved config for reproducibility
-        active = config.max_queues or hw_queues
-        total = config.high_numjobs + config.normal_numjobs
-        print(f"Condition {condition_profile.id}: {condition_profile.name}", file=sys.stderr)
-        print(f"  {condition_profile.description}", file=sys.stderr)
-        print(f"  HW queues: {hw_queues}, active: {active}, "
-              f"jobs: {config.high_numjobs}+{config.normal_numjobs} "
-              f"({total / active:.1f}/q)", file=sys.stderr)
+def _save_reports(args, results, system_info, output_dir):
+    """Generate and save all report files."""
+    # Markdown summary
+    comparisons = None
+    if results["qos"] and results["baseline"]:
+        p99_changes = [r["pct_change"] for r in results["qos"] if r.get("pct_change") is not None]
+        norm_p99_changes = [r["norm_pct_change"] for r in results["qos"]
+                            if r.get("norm_pct_change") is not None]
+        comparisons = {"p99_changes": p99_changes}
+        if norm_p99_changes:
+            comparisons["norm_p99_changes"] = norm_p99_changes
 
-        # Per-queue write bytes diagnostic
-        pqwb_parts = []
-        for d in condition_profile.depths:
-            b = condition_profile.per_queue_write_bytes(d)
-            pqwb_parts.append(f"{b / (1024**2):.1f} MB @ QD{d}")
-        if pqwb_parts:
-            pqwb_line = ", ".join(pqwb_parts)
-            print(f"  Per-queue write bytes: {pqwb_line}", file=sys.stderr)
-            max_bytes = max(condition_profile.per_queue_write_bytes(d) for d in condition_profile.depths)
-            if max_bytes > 256 * 1024**2:
-                print(colored("  WARNING: per-queue writes exceed 256 MB -- device FTL/GC will dominate", "red"),
-                      file=sys.stderr)
-            elif max_bytes > 128 * 1024**2:
-                print(colored("  WARNING: per-queue writes exceed 128 MB -- may reduce scheduler visibility", "yellow"),
-                      file=sys.stderr)
+    md_report = generate_markdown_report(system_info, results["all"], comparisons)
+    with open(output_dir / "summary.md", "w") as f:
+        f.write(md_report)
 
-        # Condition A delegates to existing baseline overhead path
-        if condition_profile.use_baseline_path:
-            return cmd_run_baseline(device, args)
-    elif args.stress:
-        config = STRESS_CONFIG
-    elif args.quick:
-        config = QUICK_CONFIG
-    elif args.config:
-        # Catch common mistake: -c A (config) when user meant -C A (condition)
-        if len(args.config) <= 2 and args.config.upper() in "ABCDEFGHIJK":
-            print(colored(
-                f"Error: '{args.config}' looks like a condition ID, not a config file.\n"
-                f"  Use -C {args.config.upper()} (uppercase C) for condition profiles.\n"
-                f"  Use -c <name> for config presets (quick/default/full) or YAML paths.",
-                "red"
-            ), file=sys.stderr)
-            return 1
-        config = load_config(args.config)
-    else:
-        config = DEFAULT_CONFIG
+    # Comparison report
+    if args.compare and results["baseline"] and results["qos"]:
+        comparison_md = generate_comparison_report(
+            results["baseline"], results["qos"], system_info
+        )
+        with open(output_dir / "comparison.md", "w") as f:
+            f.write(comparison_md)
 
-    # Override config with CLI args
+    # Capture dmesg
+    dmesg = capture_dmesg()
+    if dmesg:
+        with open(output_dir / "dmesg.txt", "w") as f:
+            f.write(dmesg)
+
+
+def _save_csv_results(results, output_dir):
+    """Generate and save CSV results."""
+    csv_rows = []
+    for r in results["all"]:
+        ks = r.get("kernel_stats", {})
+        fair = r.get("fairness", {})
+        norm = r.get("normal_metrics", {})
+        extra = {}
+
+        # Kernel stats columns
+        for key in ks:
+            extra[f"ks_{key}"] = ks[key]
+
+        # Fairness columns
+        if fair:
+            extra["fair_expected_hi_pct"] = fair.get("expected_hi_pct", "")
+            extra["fair_actual_hi_pct"] = fair.get("actual_hi_pct", "")
+            extra["fair_deviation_pct"] = fair.get("deviation_pct", "")
+            extra["fair_result"] = fair.get("fair", "")
+            extra["fair_demand_hi_pct"] = fair.get("demand_hi_pct", "")
+            extra["fair_demand_limited"] = fair.get("demand_limited", "")
+            extra["fair_effective_expected_hi_pct"] = fair.get("effective_expected_hi_pct", "")
+            extra["fair_weight_hi_pct"] = fair.get("weight_hi_pct", "")
+
+        # Normal-prio columns
+        for key in norm:
+            extra[f"norm_{key}"] = norm[key]
+
+        for i, it in enumerate(r.get("iterations", [r["metrics"]])):
+            row = flatten_result({**r["config"], "iteration": i}, it)
+            row.update(extra)
+            csv_rows.append(row)
+
+    save_csv(csv_rows, output_dir / "data.csv", CSV_FIELDNAMES)
+
+
+def _save_metadata(device, config, condition_profile, system_info, results, output_dir):
+    """Create and save benchmark metadata."""
+    hw_queues = device.get_hw_queue_count()
+    active_queues = config.max_queues if config.max_queues else hw_queues
+    total_jobs = config.high_numjobs + config.normal_numjobs
+    jobs_per_queue = total_jobs / active_queues if active_queues else 0
+
+    metadata = {
+        "system": system_info,
+        "config": {
+            "runtime": config.runtime,
+            "iterations": config.iterations,
+            "depths": config.depths,
+            "weights": config.weights,
+            "qos_max_depth": config.qos_max_depth,
+            "high_numjobs": config.high_numjobs,
+            "normal_numjobs": config.normal_numjobs,
+            "max_queues": config.max_queues,
+            "hw_queues": hw_queues,
+            "active_queues": active_queues,
+            "jobs_per_queue": round(jobs_per_queue, 1),
+            "condition_id": config.condition_id,
+            "condition_name": condition_profile.name if condition_profile else None,
+        },
+    }
+
+    if condition_profile:
+        metadata["config"]["per_queue_write_bytes"] = {
+            str(d): condition_profile.per_queue_write_bytes(d)
+            for d in condition_profile.depths
+        }
+    if results.get("weight_order"):
+        metadata["config"]["weight_order"] = results["weight_order"]
+    if results.get("drift_probes"):
+        metadata["drift_probes"] = results["drift_probes"]
+
+    save_json(metadata, output_dir / "metadata.json")
+
+
+def _print_benchmark_summary(results):
+    """Calculate and print benchmark summary statistics."""
+    if not (results["qos"] and results["baseline"]):
+        return
+
+    p99_changes = [r["pct_change"] for r in results["qos"] if r.get("pct_change") is not None]
+    if not p99_changes:
+        return
+
+    # Calculate IOPS changes
+    iops_changes = []
+    cpu_changes = []
+    for qos_r in results["qos"]:
+        depth = qos_r["config"]["iodepth"]
+        weight = qos_r["config"].get("qos_weight")
+        workload = qos_r["config"].get("workload")
+        baseline_match = next(
+            (b for b in results["baseline"]
+             if b["config"]["iodepth"] == depth
+             and b["config"].get("paired_weight") == weight
+             and b["config"].get("workload") == workload),
+            None
+        )
+        if baseline_match:
+            iops_changes.append(percentage_change(
+                baseline_match["metrics"]["iops"],
+                qos_r["metrics"]["iops"]
+            ))
+            cpu_changes.append(percentage_change(
+                baseline_match["metrics"]["cpu_pct"],
+                qos_r["metrics"]["cpu_pct"]
+            ))
+
+    norm_p99_changes = [r["norm_pct_change"] for r in results["qos"]
+                        if r.get("norm_pct_change") is not None]
+    norm_range = (min(norm_p99_changes), max(norm_p99_changes)) if norm_p99_changes else None
+
+    print_summary(
+        (min(p99_changes), max(p99_changes)),
+        (min(iops_changes), max(iops_changes)) if iops_changes else (0, 0),
+        (min(cpu_changes), max(cpu_changes)) if cpu_changes else (0, 0),
+        norm_p99_range=norm_range,
+    )
+
+
+def _apply_cli_overrides(args, config, condition_profile):
+    """Apply CLI argument overrides to config object."""
     if args.iterations:
         config.iterations = args.iterations
     if args.runtime:
@@ -1389,6 +1535,81 @@ def cmd_run(args) -> int:
             config.workload_params["normal_bs"] = args.normal_bs
         if args.normal_rw:
             config.workload_params["normal_rw"] = args.normal_rw
+
+
+def _load_benchmark_config(args, device):
+    """
+    Load benchmark config from args and device.
+    Returns: (config, condition_profile) tuple, or error code int.
+    """
+    condition_profile = None
+
+    if args.condition:
+        try:
+            condition_profile = get_condition(args.condition)
+        except KeyError as e:
+            print(colored(f"Error: {e}", "red"), file=sys.stderr)
+            return 1
+
+        hw_queues = device.get_hw_queue_count()
+        config = condition_profile.resolve(hw_queues)
+        _print_condition_diagnostics(condition_profile, config, hw_queues)
+
+        # Condition A delegates to existing baseline overhead path
+        if condition_profile.use_baseline_path:
+            return cmd_run_baseline(device, args)
+
+    elif args.stress:
+        config = STRESS_CONFIG
+    elif args.quick:
+        config = QUICK_CONFIG
+    elif args.config:
+        # Catch common mistake: -c A (config) when user meant -C A (condition)
+        if len(args.config) <= 2 and args.config.upper() in "ABCDEFGHIJK":
+            print(colored(
+                f"Error: '{args.config}' looks like a condition ID, not a config file.\n"
+                f"  Use -C {args.config.upper()} (uppercase C) for condition profiles.\n"
+                f"  Use -c <name> for config presets (quick/default/full) or YAML paths.",
+                "red"
+            ), file=sys.stderr)
+            return 1
+        config = load_config(args.config)
+    else:
+        config = DEFAULT_CONFIG
+
+    return (config, condition_profile)
+
+
+def cmd_run(args) -> int:
+    """Run benchmark suite."""
+    # Check prerequisites
+    error = _check_prerequisites()
+    if error:
+        print(colored(f"Error: {error}", "red"), file=sys.stderr)
+        return 1
+
+    # Load preferences
+    prefs = UserPreferences.load()
+
+    # Select device
+    device_name = select_device(args, prefs)
+    if not device_name:
+        return 1
+
+    device = NVMeDevice(device_name)
+
+    # Baseline overhead check (separate fast path)
+    if args.baseline:
+        return cmd_run_baseline(device, args)
+
+    # Load config
+    result = _load_benchmark_config(args, device)
+    if isinstance(result, int):
+        return result  # Error code
+    config, condition_profile = result
+
+    # Override config with CLI args
+    _apply_cli_overrides(args, config, condition_profile)
 
     # Setup output directory
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -1426,139 +1647,19 @@ def cmd_run(args) -> int:
 
     # Print summary
     print_separator()
-
-    if results["qos"] and results["baseline"]:
-        p99_changes = [r["pct_change"] for r in results["qos"] if r.get("pct_change") is not None]
-        if p99_changes:
-            # Calculate IOPS changes
-            iops_changes = []
-            cpu_changes = []
-            for qos_r in results["qos"]:
-                depth = qos_r["config"]["iodepth"]
-                weight = qos_r["config"].get("qos_weight")
-                workload = qos_r["config"].get("workload")
-                baseline_match = next(
-                    (b for b in results["baseline"]
-                     if b["config"]["iodepth"] == depth
-                     and b["config"].get("paired_weight") == weight
-                     and b["config"].get("workload") == workload),
-                    None
-                )
-                if baseline_match:
-                    iops_changes.append(percentage_change(
-                        baseline_match["metrics"]["iops"],
-                        qos_r["metrics"]["iops"]
-                    ))
-                    cpu_changes.append(percentage_change(
-                        baseline_match["metrics"]["cpu_pct"],
-                        qos_r["metrics"]["cpu_pct"]
-                    ))
-
-            norm_p99_changes = [r["norm_pct_change"] for r in results["qos"]
-                                if r.get("norm_pct_change") is not None]
-            norm_range = (min(norm_p99_changes), max(norm_p99_changes)) if norm_p99_changes else None
-
-            print_summary(
-                (min(p99_changes), max(p99_changes)),
-                (min(iops_changes), max(iops_changes)) if iops_changes else (0, 0),
-                (min(cpu_changes), max(cpu_changes)) if cpu_changes else (0, 0),
-                norm_p99_range=norm_range,
-            )
+    _print_benchmark_summary(results)
 
     # Save outputs
-    # Metadata
-    hw_queues = device.get_hw_queue_count()
-    active_queues = config.max_queues if config.max_queues else hw_queues
-    total_jobs = config.high_numjobs + config.normal_numjobs
-    jobs_per_queue = total_jobs / active_queues if active_queues else 0
-    metadata = {
-        "system": system_info,
-        "config": {
-            "runtime": config.runtime,
-            "iterations": config.iterations,
-            "depths": config.depths,
-            "weights": config.weights,
-            "qos_max_depth": config.qos_max_depth,
-            "high_numjobs": config.high_numjobs,
-            "normal_numjobs": config.normal_numjobs,
-            "max_queues": config.max_queues,
-            "hw_queues": hw_queues,
-            "active_queues": active_queues,
-            "jobs_per_queue": round(jobs_per_queue, 1),
-            "condition_id": config.condition_id,
-            "condition_name": condition_profile.name if condition_profile else None,
-        },
-    }
-    if condition_profile:
-        metadata["config"]["per_queue_write_bytes"] = {
-            str(d): condition_profile.per_queue_write_bytes(d)
-            for d in condition_profile.depths
-        }
-    if results.get("weight_order"):
-        metadata["config"]["weight_order"] = results["weight_order"]
-    if results.get("drift_probes"):
-        metadata["drift_probes"] = results["drift_probes"]
-    save_json(metadata, output_dir / "metadata.json")
+    _save_metadata(device, config, condition_profile, system_info, results, output_dir)
 
     # Aggregate results
     save_json(results, output_dir / "aggregate.json")
 
     # CSV
-    csv_rows = []
-    for r in results["all"]:
-        ks = r.get("kernel_stats", {})
-        fair = r.get("fairness", {})
-        norm = r.get("normal_metrics", {})
-        extra = {}
-        # Kernel stats columns
-        for key in ks:
-            extra[f"ks_{key}"] = ks[key]
-        # Fairness columns
-        if fair:
-            extra["fair_expected_hi_pct"] = fair.get("expected_hi_pct", "")
-            extra["fair_actual_hi_pct"] = fair.get("actual_hi_pct", "")
-            extra["fair_deviation_pct"] = fair.get("deviation_pct", "")
-            extra["fair_result"] = fair.get("fair", "")
-            extra["fair_demand_hi_pct"] = fair.get("demand_hi_pct", "")
-            extra["fair_demand_limited"] = fair.get("demand_limited", "")
-            extra["fair_effective_expected_hi_pct"] = fair.get("effective_expected_hi_pct", "")
-            extra["fair_weight_hi_pct"] = fair.get("weight_hi_pct", "")
-        # Normal-prio columns
-        for key in norm:
-            extra[f"norm_{key}"] = norm[key]
-        for i, it in enumerate(r.get("iterations", [r["metrics"]])):
-            row = flatten_result({**r["config"], "iteration": i}, it)
-            row.update(extra)
-            csv_rows.append(row)
-    save_csv(csv_rows, output_dir / "data.csv", CSV_FIELDNAMES)
+    _save_csv_results(results, output_dir)
 
-    # Markdown
-    comparisons = None
-    if results["qos"] and results["baseline"]:
-        p99_changes = [r["pct_change"] for r in results["qos"] if r.get("pct_change") is not None]
-        norm_p99_changes = [r["norm_pct_change"] for r in results["qos"]
-                            if r.get("norm_pct_change") is not None]
-        comparisons = {"p99_changes": p99_changes}
-        if norm_p99_changes:
-            comparisons["norm_p99_changes"] = norm_p99_changes
-
-    md_report = generate_markdown_report(system_info, results["all"], comparisons)
-    with open(output_dir / "summary.md", "w") as f:
-        f.write(md_report)
-
-    # Comparison report
-    if args.compare and results["baseline"] and results["qos"]:
-        comparison_md = generate_comparison_report(
-            results["baseline"], results["qos"], system_info
-        )
-        with open(output_dir / "comparison.md", "w") as f:
-            f.write(comparison_md)
-
-    # Capture dmesg
-    dmesg = capture_dmesg()
-    if dmesg:
-        with open(output_dir / "dmesg.txt", "w") as f:
-            f.write(dmesg)
+    # Generate reports
+    _save_reports(args, results, system_info, output_dir)
 
     # Calculate total runtime
     total_elapsed = time.time() - start_time

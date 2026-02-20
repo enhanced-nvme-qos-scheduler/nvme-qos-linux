@@ -25,7 +25,7 @@ apt install fio
 # 1. Check system readiness
 sudo ./nvme_qos_bench.py check
 
-# 2. Run quick validation (~2-3 min)
+# 2. Run quick validation (~5 min)
 sudo ./nvme_qos_bench.py run --quick -o ./results
 
 # 3. View results
@@ -70,10 +70,10 @@ sudo ./nvme_qos_bench.py run -d nvme0n1p7 --depths 16 32 64 --weights 4 9 19
 
 | Preset | Runtime | Iters | Depths | Weights | Ramp | Est. Time |
 |--------|---------|-------|--------|---------|------|-----------|
-| `--quick` | 30s | 2 | 16, 32 | 9 | 3s | ~2-3 min |
-| default | 60s | 5 | 16, 32, 64 | 9 | 5s | ~20 min |
+| `--quick` | 30s | 2 | 16, 32 | 9 | 3s | ~5 min |
+| default | 60s | 5 | 16, 32, 64 | 9 | 5s | ~30-35 min |
 | `--stress` | 30s | 3 | 32, 64 | 1, 4, 9, 19 | 5s | ~30 min |
-| full | 60s | 10 | 1-128 (7 depths) | 1, 4, 9, 19, 99 | 10s | ~6-8 hr |
+| full | 60s | 10 | 1-128 (7 depths) | 1, 4, 9, 19, 99 | 10s | ~14 hr |
 
 **Key Flags:**
 
@@ -188,12 +188,11 @@ Results are saved to `results/YYYYMMDD-HHMMSS-<commit>/`:
 | File | Description |
 |------|-------------|
 | `metadata.json` | System info, git commit, config parameters |
-| `aggregate.json` | Computed statistics (mean, stdev, p-values) |
+| `aggregate.json` | Computed statistics (mean, stdev, p-values, kernel QoS counters) |
 | `data.csv` | Flattened raw data for spreadsheet analysis |
 | `summary.md` | Markdown report with tables and analysis |
-| `comparison.md` | Baseline vs QoS side-by-side comparison |
+| `comparison.md` | Baseline vs QoS side-by-side comparison (when --compare used) |
 | `dmesg.txt` | Kernel logs captured during test (if available) |
-| `kernel_stats.json` | QoS scheduler counters from debugfs (if available) |
 | `raw/*.json` | Per-iteration fio JSON output files |
 
 ## Terminal Output

@@ -116,20 +116,15 @@ def _add_metric_summary_line(lines: List[str], label: str, changes: List[float])
         lines.append(f"- **{label}**: {min_change:+.1f}% to {max_change:+.1f}%")
 
 
-def generate_markdown_report(
-    system_info: Dict[str, Any],
-    results: List[Dict[str, Any]],
-    comparisons: Optional[Dict[str, Any]] = None,
-) -> str:
-    """Generate a Markdown summary report."""
-    lines = []
-
-    # Header
-    lines.append("# NVMe QoS Benchmark Results")
-    lines.append("")
-    lines.append(f"**Date**: {system_info.get('timestamp', 'N/A')}")
-    lines.append(f"**Kernel**: {system_info.get('kernel', 'N/A')}")
-    lines.append(f"**Device**: {system_info.get('device', 'N/A')}")
+def _render_report_header(system_info: Dict[str, Any]) -> List[str]:
+    """Render the header section with system info."""
+    lines = [
+        "# NVMe QoS Benchmark Results",
+        "",
+        f"**Date**: {system_info.get('timestamp', 'N/A')}",
+        f"**Kernel**: {system_info.get('kernel', 'N/A')}",
+        f"**Device**: {system_info.get('device', 'N/A')}",
+    ]
 
     nvme = system_info.get('nvme', {})
     lines.append(f"**NVMe Model**: {nvme.get('model', 'N/A')}")
@@ -140,12 +135,17 @@ def generate_markdown_report(
         lines.append(f"**Git**: {git.get('branch', 'N/A')} @ {git['commit']}{dirty}")
 
     lines.append("")
+    return lines
 
-    # Results table
-    lines.append("## Results")
-    lines.append("")
-    lines.append("| Config | p50 (us) | p90 (us) | p99 (us) | p999 (us) | IOPS | CPU % | Util % | p99 Change |")
-    lines.append("|--------|----------|----------|----------|-----------|------|-------|--------|------------|")
+
+def _render_results_table(results: List[Dict[str, Any]]) -> List[str]:
+    """Render the main results table with high-priority metrics."""
+    lines = [
+        "## Results",
+        "",
+        "| Config | p50 (us) | p90 (us) | p99 (us) | p999 (us) | IOPS | CPU % | Util % | p99 Change |",
+        "|--------|----------|----------|----------|-----------|------|-------|--------|------------|",
+    ]
 
     for r in results:
         config = r.get('config', {})
@@ -166,136 +166,182 @@ def generate_markdown_report(
         iops = metrics.get('iops', 0)
         cpu = metrics.get('cpu_pct', 0)
         change = r.get('pct_change', '')
-
         util = metrics.get('io_util_pct', 0)
 
-        if isinstance(change, (int, float)):
-            change_str = f"{change:+.1f}%"
-        else:
-            change_str = "-"
-
+        change_str = f"{change:+.1f}%" if isinstance(change, (int, float)) else "-"
         util_str = f"{util:.1f}" if util else "-"
+
         lines.append(f"| {label} | {p50:.0f} | {p90:.0f} | {p99:.0f} | {p999:.0f} | {iops:.0f} | {cpu:.1f} | {util_str} | {change_str} |")
 
     lines.append("")
+    return lines
 
-    # Normal-priority metrics table (if any QoS result has them)
+
+def _render_normal_priority_table(results: List[Dict[str, Any]]) -> List[str]:
+    """Render the normal-priority metrics table if available."""
+    lines = []
     qos_with_normal = [r for r in results if r.get("normal_metrics")]
-    if qos_with_normal:
-        # Build baseline NORM lookup by iodepth
-        baseline_norm_by_depth = {}
-        for r in results:
-            if not r.get('config', {}).get('qos_enabled') and r.get('normal_metrics'):
-                depth = r['config'].get('iodepth')
-                if depth is not None and r['config'].get('workload') is None:
-                    baseline_norm_by_depth[depth] = r['normal_metrics']
+    if not qos_with_normal:
+        return lines
 
-        lines.append("## Normal-Priority Metrics")
-        lines.append("")
-        lines.append("| Config | p50 (us) | p90 (us) | p99 (us) | p999 (us) | IOPS | BW (MB/s) | Baseline p99 | p99 Change |")
-        lines.append("|--------|----------|----------|----------|-----------|------|-----------|--------------|------------|")
-        for r in qos_with_normal:
-            config = r.get('config', {})
-            nm = r.get('normal_metrics', {})
-            label = f"QoS qd={config.get('iodepth', '-')} w={config.get('qos_weight', '-')}"
-            # Baseline NORM comparison
-            bl_norm = baseline_norm_by_depth.get(config.get('iodepth'))
-            if bl_norm and bl_norm.get('p99_us') and nm.get('p99_us'):
-                bl_p99_str = f"{bl_norm['p99_us']:.0f}"
-                change = ((nm['p99_us'] - bl_norm['p99_us']) / bl_norm['p99_us']) * 100
-                change_str = f"{change:+.1f}%"
-            else:
-                bl_p99_str = "-"
-                change_str = "-"
-            lines.append(
-                f"| {label} | {nm.get('p50_us', 0):.0f} | {nm.get('p90_us', 0):.0f} "
-                f"| {nm.get('p99_us', 0):.0f} | {nm.get('p999_us', 0):.0f} "
-                f"| {nm.get('iops', 0):.0f} | {nm.get('bw_mbps', 0):.0f} "
-                f"| {bl_p99_str} | {change_str} |"
-            )
-        lines.append("")
+    # Build baseline NORM lookup by iodepth
+    baseline_norm_by_depth = {}
+    for r in results:
+        if not r.get('config', {}).get('qos_enabled') and r.get('normal_metrics'):
+            depth = r['config'].get('iodepth')
+            if depth is not None and r['config'].get('workload') is None:
+                baseline_norm_by_depth[depth] = r['normal_metrics']
 
-    # Kernel QoS counters table (if any QoS result has them)
+    lines.extend([
+        "## Normal-Priority Metrics",
+        "",
+        "| Config | p50 (us) | p90 (us) | p99 (us) | p999 (us) | IOPS | BW (MB/s) | Baseline p99 | p99 Change |",
+        "|--------|----------|----------|----------|-----------|------|-----------|--------------|------------|",
+    ])
+
+    for r in qos_with_normal:
+        config = r.get('config', {})
+        nm = r.get('normal_metrics', {})
+        label = f"QoS qd={config.get('iodepth', '-')} w={config.get('qos_weight', '-')}"
+
+        # Baseline NORM comparison
+        bl_norm = baseline_norm_by_depth.get(config.get('iodepth'))
+        if bl_norm and bl_norm.get('p99_us') and nm.get('p99_us'):
+            bl_p99_str = f"{bl_norm['p99_us']:.0f}"
+            change = ((nm['p99_us'] - bl_norm['p99_us']) / bl_norm['p99_us']) * 100
+            change_str = f"{change:+.1f}%"
+        else:
+            bl_p99_str = "-"
+            change_str = "-"
+
+        lines.append(
+            f"| {label} | {nm.get('p50_us', 0):.0f} | {nm.get('p90_us', 0):.0f} "
+            f"| {nm.get('p99_us', 0):.0f} | {nm.get('p999_us', 0):.0f} "
+            f"| {nm.get('iops', 0):.0f} | {nm.get('bw_mbps', 0):.0f} "
+            f"| {bl_p99_str} | {change_str} |"
+        )
+
+    lines.append("")
+    return lines
+
+
+def _render_kernel_counters_table(results: List[Dict[str, Any]]) -> List[str]:
+    """Render the kernel QoS counters table if available."""
+    lines = []
     qos_with_ks = [r for r in results if r.get("kernel_stats")]
-    if qos_with_ks:
-        lines.append("## Kernel QoS Counters")
-        lines.append("")
-        lines.append("| Config | Hi Disp | Norm Disp | Hi Enq | Norm Enq | WC Hi | WC Norm | Kicks | Kick Empty | Refills | SQ Throt | Doorbells | Fair |")
-        lines.append("|--------|---------|-----------|--------|----------|-------|---------|-------|------------|---------|----------|-----------|------|")
-        for r in qos_with_ks:
-            config = r.get('config', {})
-            ks = r.get('kernel_stats', {})
-            fair = r.get('fairness', {})
-            label = f"QoS qd={config.get('iodepth', '-')} w={config.get('qos_weight', '-')}"
-            fair_str = fair.get('fair', '-')
-            if fair.get('demand_limited'):
-                fair_str += "(demand-lim)"
-            elif fair_str == "OK":
-                fair_str += "(weight-lim)"
-            lines.append(
-                f"| {label} "
-                f"| {ks.get('high_dispatched', 0)} "
-                f"| {ks.get('normal_dispatched', 0)} "
-                f"| {ks.get('high_enqueued', 0)} "
-                f"| {ks.get('normal_enqueued', 0)} "
-                f"| {ks.get('wc_high_fallback', 0)} "
-                f"| {ks.get('wc_normal_fallback', 0)} "
-                f"| {ks.get('kicks', 0)} "
-                f"| {ks.get('kick_empty', 0)} "
-                f"| {ks.get('credit_refills', 0)} "
-                f"| {ks.get('sq_throttled', 0)} "
-                f"| {ks.get('doorbells', 0)} "
-                f"| {fair_str} |"
-            )
-        lines.append("")
+    if not qos_with_ks:
+        return lines
 
-    # Comparison summary if available
+    lines.extend([
+        "## Kernel QoS Counters",
+        "",
+        "| Config | Hi Disp | Norm Disp | Hi Enq | Norm Enq | WC Hi | WC Norm | Kicks | Kick Empty | Refills | SQ Throt | Doorbells | Fair |",
+        "|--------|---------|-----------|--------|----------|-------|---------|-------|------------|---------|----------|-----------|------|",
+    ])
+
+    for r in qos_with_ks:
+        config = r.get('config', {})
+        ks = r.get('kernel_stats', {})
+        fair = r.get('fairness', {})
+        label = f"QoS qd={config.get('iodepth', '-')} w={config.get('qos_weight', '-')}"
+
+        fair_str = fair.get('fair', '-')
+        if fair.get('demand_limited'):
+            fair_str += "(demand-lim)"
+        elif fair_str == "OK":
+            fair_str += "(weight-lim)"
+
+        lines.append(
+            f"| {label} "
+            f"| {ks.get('high_dispatched', 0)} "
+            f"| {ks.get('normal_dispatched', 0)} "
+            f"| {ks.get('high_enqueued', 0)} "
+            f"| {ks.get('normal_enqueued', 0)} "
+            f"| {ks.get('wc_high_fallback', 0)} "
+            f"| {ks.get('wc_normal_fallback', 0)} "
+            f"| {ks.get('kicks', 0)} "
+            f"| {ks.get('kick_empty', 0)} "
+            f"| {ks.get('credit_refills', 0)} "
+            f"| {ks.get('sq_throttled', 0)} "
+            f"| {ks.get('doorbells', 0)} "
+            f"| {fair_str} |"
+        )
+
+    lines.append("")
+    return lines
+
+
+def _render_comparison_summary(comparisons: Dict[str, Any]) -> List[str]:
+    """Render the comparison summary section if available."""
+    lines = ["## Summary", ""]
+
+    _add_metric_summary_line(lines, "p99 Latency", comparisons.get('p99_changes', []))
+    _add_metric_summary_line(lines, "IOPS", comparisons.get('iops_changes', []))
+    _add_metric_summary_line(lines, "CPU", comparisons.get('cpu_changes', []))
+    _add_metric_summary_line(lines, "Normal-Priority p99", comparisons.get('norm_p99_changes', []))
+
+    lines.append("")
+    return lines
+
+
+def _render_report_footer(system_info: Dict[str, Any]) -> List[str]:
+    """Render the footer section."""
+    return [
+        "---",
+        f"Generated by nvme-qos-bench | fio {system_info.get('fio_version', 'N/A')}",
+    ]
+
+
+def generate_markdown_report(
+    system_info: Dict[str, Any],
+    results: List[Dict[str, Any]],
+    comparisons: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Generate a Markdown summary report."""
+    lines = []
+
+    lines.extend(_render_report_header(system_info))
+    lines.extend(_render_results_table(results))
+    lines.extend(_render_normal_priority_table(results))
+    lines.extend(_render_kernel_counters_table(results))
+
     if comparisons:
-        lines.append("## Summary")
-        lines.append("")
+        lines.extend(_render_comparison_summary(comparisons))
 
-        _add_metric_summary_line(lines, "p99 Latency", comparisons.get('p99_changes', []))
-        _add_metric_summary_line(lines, "IOPS", comparisons.get('iops_changes', []))
-        _add_metric_summary_line(lines, "CPU", comparisons.get('cpu_changes', []))
-        _add_metric_summary_line(lines, "Normal-Priority p99", comparisons.get('norm_p99_changes', []))
-
-        lines.append("")
-
-    # Footer
-    lines.append("---")
-    lines.append(f"Generated by nvme-qos-bench | fio {system_info.get('fio_version', 'N/A')}")
+    lines.extend(_render_report_footer(system_info))
 
     return "\n".join(lines)
 
 
-def generate_comparison_report(
-    baseline_results: List[Dict],
-    qos_results: List[Dict],
-    system_info: Dict,
-) -> str:
-    """Generate side-by-side comparison Markdown report."""
-    lines = []
+def _render_comparison_header(system_info: Dict[str, Any]) -> List[str]:
+    """Render comparison report header."""
+    return [
+        "# NVMe QoS Comparison Report",
+        "",
+        f"**Date**: {datetime.now().isoformat()}",
+        f"**Kernel**: {system_info.get('kernel', 'N/A')}",
+        f"**Device**: {system_info.get('device', 'N/A')}",
+        "",
+    ]
 
-    lines.append("# NVMe QoS Comparison Report")
-    lines.append("")
-    lines.append(f"**Date**: {datetime.now().isoformat()}")
-    lines.append(f"**Kernel**: {system_info.get('kernel', 'N/A')}")
-    lines.append(f"**Device**: {system_info.get('device', 'N/A')}")
-    lines.append("")
 
-    # Match baseline and QoS results by queue depth
-    baseline_by_depth = {r['config']['iodepth']: r for r in baseline_results}
-    qos_by_depth = {r['config']['iodepth']: r for r in qos_results}
-
-    # Latency comparisons for each percentile
-    lines.append("## Latency Comparison")
-    lines.append("")
+def _render_latency_comparison_tables(
+    baseline_by_depth: Dict[int, Dict],
+    qos_by_depth: Dict[int, Dict],
+) -> List[str]:
+    """Render latency comparison tables for all percentiles."""
+    lines = [
+        "## Latency Comparison",
+        "",
+    ]
 
     for pct_name, pct_key in [("p50", "p50_us"), ("p90", "p90_us"), ("p99", "p99_us"), ("p999", "p999_us")]:
-        lines.append(f"### {pct_name} Latency")
-        lines.append("")
-        lines.append(f"| Queue Depth | Baseline | QoS | Change |")
-        lines.append("|-------------|----------|-----|--------|")
+        lines.extend([
+            f"### {pct_name} Latency",
+            "",
+            "| Queue Depth | Baseline | QoS | Change |",
+            "|-------------|----------|-----|--------|",
+        ])
 
         for depth in sorted(set(baseline_by_depth.keys()) | set(qos_by_depth.keys())):
             baseline = baseline_by_depth.get(depth, {}).get('metrics', {})
@@ -309,11 +355,20 @@ def generate_comparison_report(
 
         lines.append("")
 
-    # IOPS comparison
-    lines.append("## IOPS Comparison")
-    lines.append("")
-    lines.append("| Queue Depth | Baseline | QoS | Change |")
-    lines.append("|-------------|----------|-----|--------|")
+    return lines
+
+
+def _render_iops_comparison_table(
+    baseline_by_depth: Dict[int, Dict],
+    qos_by_depth: Dict[int, Dict],
+) -> List[str]:
+    """Render IOPS comparison table."""
+    lines = [
+        "## IOPS Comparison",
+        "",
+        "| Queue Depth | Baseline | QoS | Change |",
+        "|-------------|----------|-----|--------|",
+    ]
 
     for depth in sorted(set(baseline_by_depth.keys()) | set(qos_by_depth.keys())):
         baseline = baseline_by_depth.get(depth, {}).get('metrics', {})
@@ -326,8 +381,14 @@ def generate_comparison_report(
         lines.append(f"| {depth} | {b_iops:.0f} | {q_iops:.0f} | {iops_change:+.1f}% |")
 
     lines.append("")
+    return lines
 
-    # Normal-priority p99 latency comparison
+
+def _render_normal_priority_comparison_table(
+    baseline_results: List[Dict],
+    qos_results: List[Dict],
+) -> List[str]:
+    """Render normal-priority p99 latency comparison table if data available."""
     baseline_norm_by_depth = {}
     for r in baseline_results:
         if r.get('normal_metrics') and r['config'].get('workload') is None:
@@ -338,21 +399,44 @@ def generate_comparison_report(
         if r.get('normal_metrics') and r['config'].get('workload') is None:
             qos_norm_by_depth[r['config']['iodepth']] = r['normal_metrics']
 
-    if baseline_norm_by_depth and qos_norm_by_depth:
-        lines.append("## Normal-Priority p99 Latency")
-        lines.append("")
-        lines.append("| Queue Depth | Baseline p99 (us) | QoS p99 (us) | Change |")
-        lines.append("|-------------|-------------------|--------------|--------|")
+    if not baseline_norm_by_depth or not qos_norm_by_depth:
+        return []
 
-        for depth in sorted(set(baseline_norm_by_depth.keys()) | set(qos_norm_by_depth.keys())):
-            b_norm = baseline_norm_by_depth.get(depth, {})
-            q_norm = qos_norm_by_depth.get(depth, {})
-            b_p99 = b_norm.get('p99_us', 0)
-            q_p99 = q_norm.get('p99_us', 0)
-            change = ((q_p99 - b_p99) / b_p99 * 100) if b_p99 else 0
-            lines.append(f"| {depth} | {b_p99:.0f} | {q_p99:.0f} | {change:+.1f}% |")
+    lines = [
+        "## Normal-Priority p99 Latency",
+        "",
+        "| Queue Depth | Baseline p99 (us) | QoS p99 (us) | Change |",
+        "|-------------|-------------------|--------------|--------|",
+    ]
 
-        lines.append("")
+    for depth in sorted(set(baseline_norm_by_depth.keys()) | set(qos_norm_by_depth.keys())):
+        b_norm = baseline_norm_by_depth.get(depth, {})
+        q_norm = qos_norm_by_depth.get(depth, {})
+        b_p99 = b_norm.get('p99_us', 0)
+        q_p99 = q_norm.get('p99_us', 0)
+        change = ((q_p99 - b_p99) / b_p99 * 100) if b_p99 else 0
+        lines.append(f"| {depth} | {b_p99:.0f} | {q_p99:.0f} | {change:+.1f}% |")
+
+    lines.append("")
+    return lines
+
+
+def generate_comparison_report(
+    baseline_results: List[Dict],
+    qos_results: List[Dict],
+    system_info: Dict,
+) -> str:
+    """Generate side-by-side comparison Markdown report."""
+    lines = []
+
+    # Match baseline and QoS results by queue depth
+    baseline_by_depth = {r['config']['iodepth']: r for r in baseline_results}
+    qos_by_depth = {r['config']['iodepth']: r for r in qos_results}
+
+    lines.extend(_render_comparison_header(system_info))
+    lines.extend(_render_latency_comparison_tables(baseline_by_depth, qos_by_depth))
+    lines.extend(_render_iops_comparison_table(baseline_by_depth, qos_by_depth))
+    lines.extend(_render_normal_priority_comparison_table(baseline_results, qos_results))
 
     lines.append("---")
     lines.append("Generated by nvme-qos-bench")

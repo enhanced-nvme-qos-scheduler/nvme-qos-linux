@@ -14,13 +14,15 @@
 - [x] bench-cleanup T10: Fix terminal output formatting
 - [x] bench-cleanup T11: Extract duplicated helpers from main file into lib/ (consolidated _si() and si_format())
 
-## In Progress
-- [ ] bench-cleanup T13: Structural refactor — reduce nesting depth in _run_interleaved_depth, cmd_run, output.py, analysis.py, fio_runner.py
+## Completed (continued)
+- [x] bench-cleanup T12: Rewrite tools/nvme-qos-bench/README.md (fixed timing estimates, removed nonexistent kernel_stats.json)
+- [x] bench-cleanup T13: Structural refactor — reduce nesting depth in _run_interleaved_depth, cmd_run, output.py, analysis.py, fio_runner.py
   - [x] T13.1: Extract `_add_metric_summary_line()` helper in lib/output.py (removed 4 duplicate blocks)
-  - [ ] T13.2: Refactor `generate_markdown_report()` section builders
-  - [ ] T13.3: Refactor `generate_comparison_report()` table builders
-  - [ ] T13.4: Refactor `_run_interleaved_depth()` in nvme_qos_bench.py
-  - [ ] T13.5: Refactor `cmd_run()` in nvme_qos_bench.py
+  - [x] T13.2: Refactor `generate_markdown_report()` section builders
+  - [x] T13.3: Refactor `generate_comparison_report()` table builders
+  - [x] T13.4: Refactor `_run_interleaved_depth()` in nvme_qos_bench.py
+  - [x] T13.5: Refactor `cmd_run()` in nvme_qos_bench.py (reduced from 295 to 93 lines via 6 helpers)
+
+## In Progress
 
 ## Pending
-- [x] bench-cleanup T12: Rewrite tools/nvme-qos-bench/README.md
