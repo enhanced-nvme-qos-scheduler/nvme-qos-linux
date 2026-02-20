@@ -269,6 +269,7 @@ struct nvme_queue {
 	int high_credits;
 	int normal_credits;
 	s64 high_tokens;
+	s64 normal_tokens;
 	unsigned long last_refill_jiffies;
 	atomic_t in_flight;
 	unsigned int	qos_bypass;
@@ -1319,7 +1320,7 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 	unsigned long now = jiffies;
 	unsigned long delta = now - nvmeq->last_refill_jiffies;
 	unsigned int high_rate = nvmeq->dev->qos_high_weight;
-	unsigned int normal_rate = 10 - high_rate;
+	unsigned int normal_rate = nvmeq->dev->qos_normal_weight;
 	unsigned int burst_window = nvmeq->dev->qos_burst_window;
 	unsigned int high_cap = high_rate * burst_window;
 	unsigned int normal_cap = normal_rate * burst_window;
@@ -1345,13 +1346,15 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 }
 
 /**
- * nvme_qos_dequeue_wrr - Dequeue a request using WRR policy
+ * nvme_qos_dequeue_wrr - Dequeue a request using a Hybrid QoS policy
  * @nvmeq: The NVMe queue to dequeue from
  * @is_high: Output parameter set to true if the dequeued request is High Priority
  *
  * Returns a pointer to the dequeued request, or NULL if both lists are empty.
- * This function tracks tokens for WRR and determines priority status based
- * on the source list to avoid redundant bio-level priority checks.
+ * This function implements a dual-gating hybrid scheduler. It tracks count-based
+ * credits to enforce proportional throughput (WRR) under contention, and time-based
+ * tokens to cap burst sizes for latency isolation. Priority status is determined
+ * based on the source list to avoid redundant bio-level priority checks.
  */
 static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_high)
 {
@@ -1382,6 +1385,8 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_h
 		list_del_init(&req->queuelist);
 		if (nvmeq->normal_credits > 0)
 			nvmeq->normal_credits--;
+		if (nvmeq->normal_tokens > 0)
+			nvmeq->normal_tokens--;
 		*is_high = false;
 		return req;
 	}
@@ -1402,6 +1407,8 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_h
 		list_del_init(&req->queuelist);
 		if (nvmeq->normal_credits > 0)
 			nvmeq->normal_credits--;
+		if (nvmeq->normal_tokens > 0)
+			nvmeq->normal_tokens--;
 		*is_high = false;
 		return req;
 	}
@@ -2452,6 +2459,7 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 	INIT_LIST_HEAD(&nvmeq->high_prio_list);
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
 	nvmeq->high_tokens = dev->qos_high_weight;
+	nvmeq->normal_tokens = dev->qos_normal_weight;
 	nvmeq->last_refill_jiffies = jiffies;
 	atomic_set(&nvmeq->in_flight, 0);
 	nvmeq->qos_bypass = 0;
@@ -2511,6 +2519,7 @@ static void nvme_init_queue(struct nvme_queue *nvmeq, u16 qid)
 	INIT_LIST_HEAD(&nvmeq->high_prio_list);
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
 	nvmeq->high_tokens = dev->qos_high_weight;
+	nvmeq->normal_tokens = dev->qos_normal_weight;
 	nvmeq->last_refill_jiffies = jiffies;
 	atomic_set(&nvmeq->in_flight, 0);
 	nvmeq->qos_bypass = 0;
