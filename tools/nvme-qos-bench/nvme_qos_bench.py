@@ -363,12 +363,10 @@ def _run_interleaved_depth(
         ks_counters = None
         ks_fairness = None
         if ks_available:
-            try:
-                ks_counters = kernel_stats.read_aggregate()
+            ks_counters = kernel_stats.read_aggregate()
+            if ks_counters is not None:
                 ks_fairness = QoSKernelStats.validate_fairness(
                     ks_counters, weight)
-            except (PermissionError, OSError):
-                pass
 
         # Calculate change vs paired baseline
         pct_change = None
@@ -978,6 +976,9 @@ def _validate_policy_override(
         return False, {"error": "force_high fio run failed"}
 
     counters = kernel_stats.read_aggregate()
+    if counters is None:
+        return False, {"error": "kernel stats unavailable after force_high run"}
+
     hi_enq = counters.get("high_enqueued", 0)
     norm_enq = counters.get("normal_enqueued", 0)
     total_enq = hi_enq + norm_enq
@@ -996,7 +997,7 @@ def _validate_policy_override(
     }
 
     status = colored("PASS", "green") if force_high_pass else colored("FAIL", "red")
-    print(f"  force_high + BE traffic:  {hi_pct:.1f}% high enqueues (>= 95%)    {status}")
+    print(f"  force_high + BE traffic:  {hi_pct:>5.1f}% high enqueues (>= 95%)  {status}", file=sys.stderr)
 
     # force_normal: RT traffic should be reclassified as normal
     device.set_qos_policy("force_normal")
@@ -1009,6 +1010,9 @@ def _validate_policy_override(
         return False, {"error": "force_normal fio run failed"}
 
     counters = kernel_stats.read_aggregate()
+    if counters is None:
+        return False, {"error": "kernel stats unavailable after force_normal run"}
+
     hi_enq = counters.get("high_enqueued", 0)
     norm_enq = counters.get("normal_enqueued", 0)
     total_enq = hi_enq + norm_enq
@@ -1027,7 +1031,7 @@ def _validate_policy_override(
     }
 
     status = colored("PASS", "green") if force_normal_pass else colored("FAIL", "red")
-    print(f"  force_normal + RT traffic: {norm_pct:.1f}% normal enqueues (>= 95%) {status}")
+    print(f"  force_normal + RT traffic: {norm_pct:>5.1f}% normal enqueues (>= 95%) {status}", file=sys.stderr)
 
     device.set_qos_policy("default")
     return force_high_pass and force_normal_pass, results
@@ -1056,7 +1060,7 @@ def _validate_enable_disable(
     results["off"] = {"iops": off_iops, "pass": off_pass}
 
     status = colored("PASS", "green") if off_pass else colored("FAIL", "red")
-    print(f"  QoS off:  {si_format(off_iops):>6} IOPS{' ' * 36}{status}")
+    print(f"  QoS off:  {si_format(off_iops):>8} IOPS                                       {status}", file=sys.stderr)
 
     # Phase 2: QoS enabled
     device.set_qos_enabled(True)
@@ -1072,12 +1076,15 @@ def _validate_enable_disable(
     on_primary = get_primary_metrics(on_metrics)
     on_iops = on_primary.get("iops", 0)
     counters = kernel_stats.read_aggregate()
+    if counters is None:
+        return False, {"error": "kernel stats unavailable after QoS-on run"}
+
     hi_enq = counters.get("high_enqueued", 0)
     on_pass = success and on_iops > 0 and hi_enq > 0
     results["on"] = {"iops": on_iops, "high_enqueued": hi_enq, "pass": on_pass}
 
     status = colored("PASS", "green") if on_pass else colored("FAIL", "red")
-    print(f"  QoS on:   {si_format(on_iops):>6} IOPS, {_si(hi_enq)} high_enqueued{' ' * 17}{status}")
+    print(f"  QoS on:   {si_format(on_iops):>8} IOPS, {si_format(hi_enq):>6} high_enqueued         {status}", file=sys.stderr)
 
     # Phase 3: QoS disabled again (round-trip)
     device.set_qos_enabled(False)
@@ -1094,7 +1101,7 @@ def _validate_enable_disable(
     results["off_roundtrip"] = {"iops": off2_iops, "pass": off2_pass}
 
     status = colored("PASS", "green") if off2_pass else colored("FAIL", "red")
-    print(f"  QoS off:  {si_format(off2_iops):>6} IOPS{' ' * 36}{status}")
+    print(f"  QoS off:  {si_format(off2_iops):>8} IOPS                                       {status}", file=sys.stderr)
 
     return off_pass and on_pass and off2_pass, results
 
@@ -1119,6 +1126,9 @@ def _validate_classification(
         return False, {"error": "RT-only fio run failed"}
 
     counters = kernel_stats.read_aggregate()
+    if counters is None:
+        return False, {"error": "kernel stats unavailable after RT-only run"}
+
     hi_enq = counters.get("high_enqueued", 0)
     norm_enq = counters.get("normal_enqueued", 0)
     total_enq = hi_enq + norm_enq
@@ -1133,7 +1143,7 @@ def _validate_classification(
     }
 
     status = colored("PASS", "green") if rt_pass else colored("FAIL", "red")
-    print(f"  RT-only:  {rt_hi_pct:.0f}% high enqueues{' ' * 30}{status}")
+    print(f"  RT-only:  {rt_hi_pct:>5.0f}% high enqueues                          {status}", file=sys.stderr)
 
     # BE-only: should all go to normal
     kernel_stats.reset()
@@ -1144,6 +1154,9 @@ def _validate_classification(
         return False, {"error": "BE-only fio run failed"}
 
     counters = kernel_stats.read_aggregate()
+    if counters is None:
+        return False, {"error": "kernel stats unavailable after BE-only run"}
+
     hi_enq = counters.get("high_enqueued", 0)
     norm_enq = counters.get("normal_enqueued", 0)
     total_enq = hi_enq + norm_enq
@@ -1158,7 +1171,7 @@ def _validate_classification(
     }
 
     status = colored("PASS", "green") if be_pass else colored("FAIL", "red")
-    print(f"  BE-only:  {be_norm_pct:.0f}% normal enqueues{' ' * 28}{status}")
+    print(f"  BE-only:  {be_norm_pct:>5.0f}% normal enqueues                        {status}", file=sys.stderr)
 
     return rt_pass and be_pass, results
 
@@ -1551,25 +1564,14 @@ def cmd_run(args) -> int:
     total_elapsed = time.time() - start_time
     minutes, seconds = divmod(total_elapsed, 60)
 
-    print()
-    print(f"Results saved to: {output_dir}")
+    print(file=sys.stderr)
+    print(f"Results saved to: {output_dir}", file=sys.stderr)
     if minutes >= 1:
-        print(f"Total runtime: {int(minutes)}m {seconds:.1f}s")
+        print(f"Total runtime: {int(minutes)}m {seconds:.1f}s", file=sys.stderr)
     else:
-        print(f"Total runtime: {total_elapsed:.1f}s")
+        print(f"Total runtime: {total_elapsed:.1f}s", file=sys.stderr)
 
     return 0
-
-
-def _si(n) -> str:
-    """Compact SI formatting for integer counters."""
-    n = int(n)
-    if n < 1000:
-        return str(n)
-    elif n < 1_000_000:
-        return f"{n/1000:.0f}K" if n >= 10_000 else f"{n/1000:.1f}K"
-    else:
-        return f"{n/1_000_000:.1f}M"
 
 
 def _find_baseline_match(results: List[Dict], depth: int,
@@ -1961,8 +1963,8 @@ def _print_kernel_section(results: Dict) -> None:
         else:
             wrr_pct = wc_pct = 0
 
-        print(f"  WRR path:  {_si(wrr_hi)} hi + {_si(wrr_norm)} norm = {_si(wrr_total)} ({wrr_pct:.1f}% of dispatches)")
-        print(f"  WC fallback: {_si(wc_hi)} hi + {_si(wc_norm)} norm = {_si(wc_total)} ({wc_pct:.1f}%)")
+        print(f"  WRR path:  {si_format(wrr_hi)} hi + {si_format(wrr_norm)} norm = {si_format(wrr_total)} ({wrr_pct:.1f}% of dispatches)")
+        print(f"  WC fallback: {si_format(wc_hi)} hi + {si_format(wc_norm)} norm = {si_format(wc_total)} ({wc_pct:.1f}%)")
 
         # Interpretive text for contention level
         if wc_pct > 90:
@@ -1985,7 +1987,7 @@ def _print_kernel_section(results: Dict) -> None:
         # Credits
         refills = ks.get("credit_refills", 0)
         throttled = ks.get("sq_throttled", 0)
-        print(f"  Credits: {_si(refills)} refills, {_si(throttled)} throttles")
+        print(f"  Credits: {si_format(refills)} refills, {si_format(throttled)} throttles")
 
         # Kicks
         kicks = ks.get("kicks", 0)
@@ -1995,7 +1997,7 @@ def _print_kernel_section(results: Dict) -> None:
             kick_hit_pct = kicks / kick_total * 100
         else:
             kick_hit_pct = 0
-        print(f"  Kicks: {_si(kicks)} successful / {_si(kick_total)} attempts ({kick_hit_pct:.1f}% hit rate)")
+        print(f"  Kicks: {si_format(kicks)} successful / {si_format(kick_total)} attempts ({kick_hit_pct:.1f}% hit rate)")
 
         if kick_total > 0:
             if kick_hit_pct < 1:
@@ -2010,7 +2012,7 @@ def _print_kernel_section(results: Dict) -> None:
         doorbells = ks.get("doorbells", 0)
         if doorbells > 0 and total > 0:
             batch_ratio = total / doorbells
-            print(f"  Doorbells: {_si(doorbells)} ({batch_ratio:.1f} dispatches/doorbell)")
+            print(f"  Doorbells: {si_format(doorbells)} ({batch_ratio:.1f} dispatches/doorbell)")
 
         # Fairness
         fair_str = fairness.get("fair", "?")
@@ -2228,7 +2230,7 @@ def cmd_analyze(args) -> int:
     _print_analyze_summary(results, config_info)
 
     # Markdown output
-    if hasattr(args, 'output') and args.output:
+    if args.output:
         md = generate_analysis_report(input_dir, results, system_info, config_info)
         out_path = Path(args.output)
         with open(out_path, "w") as f:
@@ -2387,7 +2389,7 @@ def _compare_commits(args) -> int:
     base_dirty = any(r.dirty for r in base_runs)
     test_dirty = any(r.dirty for r in test_runs)
 
-    metric_key = args.metric if hasattr(args, 'metric') and args.metric else "p99_us"
+    metric_key = args.metric if args.metric else "p99_us"
     metric_label = metric_key.replace("_us", "").upper() if metric_key.endswith("_us") else metric_key
 
     # Header
@@ -2499,7 +2501,7 @@ def _compare_commits(args) -> int:
         print(colored(f"* Low sample sizes (min n={min_samples}). Rerun with --iterations 5+ for higher confidence.", "yellow"))
 
     # Markdown output
-    if hasattr(args, 'output') and args.output:
+    if args.output:
         md = generate_commit_comparison_report(
             base_runs, test_runs, comparisons, metric_key,
             base_commit, test_commit, base_branch, test_branch,
@@ -2517,9 +2519,8 @@ def _compare_commits(args) -> int:
 def cmd_compare(args) -> int:
     """Compare two result sets or two commits."""
     # Route to appropriate comparison mode
-    has_dirs = hasattr(args, 'baseline') and args.baseline and hasattr(args, 'test') and args.test
-    has_commits = (hasattr(args, 'base_commit') and args.base_commit
-                   and hasattr(args, 'test_commit') and args.test_commit)
+    has_dirs = args.baseline and args.test
+    has_commits = args.base_commit and args.test_commit
 
     if has_dirs:
         return _compare_directories(args.baseline, args.test)
@@ -2671,36 +2672,62 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # Check command
-    check_parser = subparsers.add_parser("check", help="Check system readiness")
+    check_parser = subparsers.add_parser(
+        "check",
+        help="Check system readiness",
+        epilog="Example:\n  ./nvme_qos_bench.py check"
+    )
 
     # Run command
-    run_parser = subparsers.add_parser("run", help="Run benchmark suite")
-    run_parser.add_argument("-d", "--device", help="NVMe device (e.g., nvme0n1p7)")
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run benchmark suite",
+        epilog="""Examples:
+  Quick test (~5 min):
+    ./nvme_qos_bench.py run -d nvme0n1p7 --quick
+
+  Full default suite (~20 min):
+    ./nvme_qos_bench.py run -d nvme0n1p7
+
+  Stress test with high contention (~30 min):
+    ./nvme_qos_bench.py run -d nvme0n1p7 --stress
+
+  Custom depths and weights:
+    ./nvme_qos_bench.py run -d nvme0n1p7 --depths 8 16 32 --weights 7 9 11
+
+  Load condition profile:
+    ./nvme_qos_bench.py run -d nvme0n1p7 -C A
+
+  Baseline overhead check (~2 min):
+    ./nvme_qos_bench.py run -d nvme0n1p7 --baseline
+"""
+    )
+    run_parser.add_argument("-d", "--device", metavar="DEV", help="NVMe device (e.g., nvme0n1p7)")
     run_parser.add_argument("--reset-device", action="store_true",
                            help="Clear saved device preference")
-    run_parser.add_argument("-o", "--output", default="./results",
+    run_parser.add_argument("-o", "--output", metavar="DIR", default="./results",
                            help="Output directory (default: ./results)")
-    run_parser.add_argument("-c", "--config", help="Config file or preset (quick/default/full)")
+    run_parser.add_argument("-c", "--config", metavar="CFG", help="Config file or preset (quick/default/full)")
     run_parser.add_argument("--quick", action="store_true", help="Use quick preset (~5 min)")
     run_parser.add_argument("--stress", action="store_true",
                            help="Use stress preset: high contention to exercise WRR (~25-35 min)")
-    run_parser.add_argument("--iterations", type=int, help="Iterations per config")
-    run_parser.add_argument("--runtime", type=int, help="Seconds per test")
-    run_parser.add_argument("--depths", type=int, nargs="+", help="Queue depths to test")
-    run_parser.add_argument("--weights", type=int, nargs="+", help="QoS weights to test")
-    run_parser.add_argument("--max-depth", type=int, default=0,
+    run_parser.add_argument("--iterations", type=int, metavar="N", help="Iterations per config")
+    run_parser.add_argument("--runtime", type=int, metavar="SEC", help="Seconds per test")
+    run_parser.add_argument("--depths", type=int, nargs="+", metavar="QD", help="Queue depths to test")
+    run_parser.add_argument("--weights", type=int, nargs="+", metavar="W", help="QoS weights to test")
+    run_parser.add_argument("--max-depth", type=int, default=0, metavar="N",
                            help="QoS max in-flight per queue (0=full SQ depth, e.g. 16 forces host-side queuing)")
     run_parser.add_argument("--buffered", action="store_true",
                            help="Include buffered I/O (page cache) workloads")
-    run_parser.add_argument("--high-numjobs", type=int,
+    run_parser.add_argument("--high-numjobs", type=int, metavar="N",
                            help="Override high-priority job count")
-    run_parser.add_argument("--normal-numjobs", type=int,
+    run_parser.add_argument("--normal-numjobs", type=int, metavar="N",
                            help="Override normal-priority job count")
-    run_parser.add_argument("--normal-bs",
+    run_parser.add_argument("--normal-bs", metavar="SIZE",
                            help="Override normal-priority block size (e.g., 4k, 64k, 256k)")
-    run_parser.add_argument("--normal-rw",
+    run_parser.add_argument("--normal-rw", metavar="PATTERN",
                            help="Override normal-priority I/O pattern (e.g., write, randwrite, randread)")
-    run_parser.add_argument("--max-queues", type=int,
+    run_parser.add_argument("--max-queues", type=int, metavar="N",
                            help="Pin fio to N CPUs to force N HW queues (increases per-queue contention)")
     run_parser.add_argument("--compare", action="store_true",
                            help="Generate comparison report")
@@ -2710,64 +2737,132 @@ def main():
                            help="Load condition profile (A, C-D, F-I, K). Auto-scales to hardware.")
 
     # Conditions command
-    cond_parser = subparsers.add_parser("conditions",
-        help="List available load condition profiles")
-    cond_parser.add_argument("condition_id", nargs="?", default=None,
+    cond_parser = subparsers.add_parser(
+        "conditions",
+        help="List available load condition profiles",
+        epilog="""Examples:
+  List all condition profiles:
+    ./nvme_qos_bench.py conditions
+
+  Show details for condition A:
+    ./nvme_qos_bench.py conditions A
+
+  Show resolved config for device:
+    ./nvme_qos_bench.py conditions A -d nvme0n1p7
+"""
+    )
+    cond_parser.add_argument("condition_id", nargs="?", default=None, metavar="ID",
         help="Show details for a specific condition (A-K)")
-    cond_parser.add_argument("-d", "--device",
+    cond_parser.add_argument("-d", "--device", metavar="DEV",
         help="Show resolved config for this device's HW queue count")
 
     # Validate command
-    validate_parser = subparsers.add_parser("validate",
-        help="Quick functional validation (~2-3 min)")
-    validate_parser.add_argument("-d", "--device", help="NVMe device (e.g., nvme0n1p7)")
+    validate_parser = subparsers.add_parser(
+        "validate",
+        help="Quick functional validation (~2-3 min)",
+        epilog="""Example:
+  Run validation on device:
+    ./nvme_qos_bench.py validate -d nvme0n1p7
+"""
+    )
+    validate_parser.add_argument("-d", "--device", metavar="DEV", help="NVMe device (e.g., nvme0n1p7)")
     validate_parser.add_argument("--reset-device", action="store_true",
                                  help="Clear saved device preference")
-    validate_parser.add_argument("-o", "--output", default="./results",
+    validate_parser.add_argument("-o", "--output", metavar="DIR", default="./results",
                                  help="Output directory (default: ./results)")
 
     # Analyze command
-    analyze_parser = subparsers.add_parser("analyze", help="Analyze existing results")
-    analyze_parser.add_argument("-i", "--input", required=True, help="Results directory")
-    analyze_parser.add_argument("-o", "--output", help="Write markdown report to file")
+    analyze_parser = subparsers.add_parser(
+        "analyze",
+        help="Analyze existing results",
+        epilog="""Examples:
+  Analyze results to terminal:
+    ./nvme_qos_bench.py analyze -i ./results/20260220-143012-abc1234
+
+  Write markdown report to file:
+    ./nvme_qos_bench.py analyze -i ./results/20260220-143012-abc1234 -o report.md
+"""
+    )
+    analyze_parser.add_argument("-i", "--input", required=True, metavar="DIR", help="Results directory")
+    analyze_parser.add_argument("-o", "--output", metavar="FILE", help="Write markdown report to file")
 
     # List command
-    list_parser = subparsers.add_parser("list", help="List all benchmark runs")
-    list_parser.add_argument("--results-dir", default="./results",
+    list_parser = subparsers.add_parser(
+        "list",
+        help="List all benchmark runs",
+        epilog="""Examples:
+  List all runs:
+    ./nvme_qos_bench.py list
+
+  List runs from specific results directory:
+    ./nvme_qos_bench.py list --results-dir /path/to/results
+
+  Filter by commit SHA prefix:
+    ./nvme_qos_bench.py list --commit abc1234
+"""
+    )
+    list_parser.add_argument("--results-dir", metavar="DIR", default="./results",
                              help="Results directory (default: ./results)")
-    list_parser.add_argument("--commit", help="Filter by commit prefix")
+    list_parser.add_argument("--commit", metavar="SHA", help="Filter by commit prefix")
 
     # Compare command
-    compare_parser = subparsers.add_parser("compare", help="Compare two result sets or commits")
-    compare_parser.add_argument("-b", "--baseline", help="Baseline results dir")
-    compare_parser.add_argument("-t", "--test", help="Test results dir")
-    compare_parser.add_argument("--base-commit", help="Base commit SHA prefix")
-    compare_parser.add_argument("--test-commit", help="Test commit SHA prefix")
-    compare_parser.add_argument("--results-dir", default="./results",
+    compare_parser = subparsers.add_parser(
+        "compare",
+        help="Compare two result sets or commits",
+        epilog="""Examples:
+  Compare two result directories:
+    ./nvme_qos_bench.py compare -b ./results/baseline-abc1234 -t ./results/test-def5678
+
+  Compare two commits:
+    ./nvme_qos_bench.py compare --base-commit abc1234 --test-commit def5678
+
+  Compare with custom metric:
+    ./nvme_qos_bench.py compare -b baseline-dir -t test-dir --metric iops
+
+  Write comparison to file:
+    ./nvme_qos_bench.py compare -b baseline-dir -t test-dir -o comparison.md
+"""
+    )
+    compare_parser.add_argument("-b", "--baseline", metavar="DIR", help="Baseline results dir")
+    compare_parser.add_argument("-t", "--test", metavar="DIR", help="Test results dir")
+    compare_parser.add_argument("--base-commit", metavar="SHA", help="Base commit SHA prefix")
+    compare_parser.add_argument("--test-commit", metavar="SHA", help="Test commit SHA prefix")
+    compare_parser.add_argument("--results-dir", metavar="DIR", default="./results",
                                 help="Results directory for commit comparison (default: ./results)")
-    compare_parser.add_argument("--metric", default="p99_us",
+    compare_parser.add_argument("--metric", metavar="NAME", default="p99_us",
                                 help="Metric to compare (default: p99_us)")
-    compare_parser.add_argument("-o", "--output", help="Write markdown report to file")
+    compare_parser.add_argument("-o", "--output", metavar="FILE", help="Write markdown report to file")
 
     args = parser.parse_args()
 
-    if args.command == "check":
-        return cmd_check(args)
-    elif args.command == "run":
-        return cmd_run(args)
-    elif args.command == "validate":
-        return cmd_validate(args)
-    elif args.command == "conditions":
-        return cmd_conditions(args)
-    elif args.command == "analyze":
-        return cmd_analyze(args)
-    elif args.command == "list":
-        return cmd_list(args)
-    elif args.command == "compare":
-        return cmd_compare(args)
-    else:
-        parser.print_help()
-        return 0
+    try:
+        if args.command == "check":
+            return cmd_check(args)
+        elif args.command == "run":
+            return cmd_run(args)
+        elif args.command == "validate":
+            return cmd_validate(args)
+        elif args.command == "conditions":
+            return cmd_conditions(args)
+        elif args.command == "analyze":
+            return cmd_analyze(args)
+        elif args.command == "list":
+            return cmd_list(args)
+        elif args.command == "compare":
+            return cmd_compare(args)
+        else:
+            parser.print_help()
+            return 0
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user", file=sys.stderr)
+        return 130
+    except Exception as e:
+        print(colored(f"Error: {e}", "red"), file=sys.stderr)
+        print("An unexpected error occurred. This may be a bug.", file=sys.stderr)
+        import traceback
+        print("\nFull traceback:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

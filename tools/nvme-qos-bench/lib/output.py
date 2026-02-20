@@ -108,6 +108,14 @@ CSV_FIELDNAMES = [
 ]
 
 
+def _add_metric_summary_line(lines: List[str], label: str, changes: List[float]) -> None:
+    """Add a metric summary line showing min/max percentage change range."""
+    if changes:
+        min_change = min(changes)
+        max_change = max(changes)
+        lines.append(f"- **{label}**: {min_change:+.1f}% to {max_change:+.1f}%")
+
+
 def generate_markdown_report(
     system_info: Dict[str, Any],
     results: List[Dict[str, Any]],
@@ -246,29 +254,10 @@ def generate_markdown_report(
         lines.append("## Summary")
         lines.append("")
 
-        p99_changes = comparisons.get('p99_changes', [])
-        if p99_changes:
-            min_change = min(p99_changes)
-            max_change = max(p99_changes)
-            lines.append(f"- **p99 Latency**: {min_change:+.1f}% to {max_change:+.1f}%")
-
-        iops_changes = comparisons.get('iops_changes', [])
-        if iops_changes:
-            min_change = min(iops_changes)
-            max_change = max(iops_changes)
-            lines.append(f"- **IOPS**: {min_change:+.1f}% to {max_change:+.1f}%")
-
-        cpu_changes = comparisons.get('cpu_changes', [])
-        if cpu_changes:
-            min_change = min(cpu_changes)
-            max_change = max(cpu_changes)
-            lines.append(f"- **CPU**: {min_change:+.1f}% to {max_change:+.1f}%")
-
-        norm_p99_changes = comparisons.get('norm_p99_changes', [])
-        if norm_p99_changes:
-            min_change = min(norm_p99_changes)
-            max_change = max(norm_p99_changes)
-            lines.append(f"- **Normal-Priority p99**: {min_change:+.1f}% to {max_change:+.1f}%")
+        _add_metric_summary_line(lines, "p99 Latency", comparisons.get('p99_changes', []))
+        _add_metric_summary_line(lines, "IOPS", comparisons.get('iops_changes', []))
+        _add_metric_summary_line(lines, "CPU", comparisons.get('cpu_changes', []))
+        _add_metric_summary_line(lines, "Normal-Priority p99", comparisons.get('norm_p99_changes', []))
 
         lines.append("")
 

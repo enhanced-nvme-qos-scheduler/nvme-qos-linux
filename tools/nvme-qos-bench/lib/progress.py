@@ -20,13 +20,43 @@ def colored(st: str, color: str, bold: bool = False) -> str:
         return f"\033[1;{code}m{st}\033[0m"
     return f"\033[{code}m{st}\033[0m"
 
-def si_format(num: float, suffix: str = "", precision: int = 1) -> str:
-    """Format number with SI prefix (K/M/G/T)."""
+def si_format(num: float, suffix: str = "", precision: int = None) -> str:
+    """Format number with SI prefix (K/M/G/T).
+
+    Args:
+        num: Number to format
+        suffix: Optional suffix to append (e.g., "B" for bytes)
+        precision: Decimal places. If None, uses smart precision:
+                   - integers with K/M/G/T and value >= 10: 0 decimals (e.g., "15K")
+                   - small K values (< 10K): 1 decimal (e.g., "5.4K")
+                   - M/G/T values: 1 decimal (e.g., "1.5M")
+                   - raw integers (no unit): 0 decimals (e.g., "500")
+                   - floats: 1 decimal
+    """
+    original_is_int = isinstance(num, int) or (isinstance(num, float) and num == int(num))
+
     for unit in ['', 'K', 'M', 'G', 'T']:
         if abs(num) < 1000:
-            return f"{num:.{precision}f}{unit}{suffix}"
+            # Check if scaled value is also an integer
+            scaled_is_int = num == int(num)
+
+            # Determine precision if not specified
+            if precision is None:
+                if unit == '':
+                    # Raw value with no unit - use 0 decimals for ints
+                    prec = 0 if original_is_int else 1
+                elif scaled_is_int:
+                    # Scaled value is an integer (5.0, 15.0, etc.) - no decimals
+                    prec = 0
+                else:
+                    # Fractional values - 1 decimal (e.g., 5.4K, 1.5M)
+                    prec = 1
+            else:
+                prec = precision
+
+            return f"{num:.{prec}f}{unit}{suffix}"
         num /= 1000
-    return f"{num:.{precision}f}P{suffix}"
+    return f"{num:.{precision or 1}f}P{suffix}"
 
 def format_us(us: float) -> str:
     """Format microseconds with appropriate unit."""
@@ -173,3 +203,7 @@ def print_summary(p99_range: tuple, iops_range: tuple, cpu_range: tuple,
     if norm_p99_range:
         parts.append(f"norm_p99 {norm_p99_range[0]:+.1f}% to {norm_p99_range[1]:+.1f}%")
     print(f"summary: {' | '.join(parts)}", file=sys.stderr)
+
+def print_status(msg: str) -> None:
+    """Print status/progress message to stderr."""
+    print(msg, file=sys.stderr)

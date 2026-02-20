@@ -4,9 +4,13 @@
 import os
 import platform
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+# Cached system info to avoid repeated subprocess calls
+_cached_system_info: Optional[Dict[str, Any]] = None
 
 
 def get_kernel_version() -> str:
@@ -92,18 +96,19 @@ def get_git_info() -> Dict[str, Any]:
         "dirty": False,
     }
 
-    # Find repo root (look for drivers/nvme relative path)
-    script_dir = Path(__file__).parent.parent
-    repo_candidates = [
-        script_dir.parent.parent,  # tools/nvme-qos-bench -> repo root
-        Path.cwd(),
-    ]
-
+    # Find repo root using git's built-in command
     repo_root = None
-    for candidate in repo_candidates:
-        if (candidate / ".git").exists():
-            repo_root = candidate
-            break
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parent,
+        )
+        if result.returncode == 0:
+            repo_root = Path(result.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return info
 
     if repo_root is None:
         return info
@@ -168,8 +173,19 @@ def check_fio_available() -> bool:
 
 
 def collect_system_info(device_name: str, controller: str) -> Dict[str, Any]:
-    """Collect complete system information for metadata."""
-    return {
+    """Collect complete system information for metadata (cached after first call)."""
+    global _cached_system_info
+
+    if _cached_system_info is not None:
+        # Update only per-invocation fields
+        result = _cached_system_info.copy()
+        result["timestamp"] = datetime.now().isoformat()
+        result["device"] = device_name
+        result["nvme"] = get_nvme_info(controller)
+        return result
+
+    # First call: collect and cache
+    _cached_system_info = {
         "timestamp": datetime.now().isoformat(),
         "kernel": get_kernel_version(),
         "cpu": get_cpu_info(),
@@ -180,9 +196,11 @@ def collect_system_info(device_name: str, controller: str) -> Dict[str, Any]:
         "fio_version": get_fio_version(),
     }
 
+    return _cached_system_info
+
 
 def capture_dmesg(filter_patterns: Optional[list] = None) -> str:
-    """Capture dmesg output, optionally filtered."""
+    """Capture dmesg output, optionally filtered. Returns empty string on failure with warning."""
     if filter_patterns is None:
         filter_patterns = ["nvme", "error", "warning", "qos"]
 
@@ -193,6 +211,7 @@ def capture_dmesg(filter_patterns: Optional[list] = None) -> str:
             text=True,
         )
         if result.returncode != 0:
+            print(f"Warning: dmesg capture failed (exit code {result.returncode}). May need root privileges.", file=sys.stderr)
             return ""
 
         lines = result.stdout.splitlines()
@@ -207,5 +226,6 @@ def capture_dmesg(filter_patterns: Optional[list] = None) -> str:
             return "\n".join(filtered)
 
         return result.stdout
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"Warning: dmesg capture failed ({e}). May need root privileges.", file=sys.stderr)
         return ""
