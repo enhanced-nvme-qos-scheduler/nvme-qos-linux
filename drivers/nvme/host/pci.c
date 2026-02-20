@@ -197,6 +197,12 @@ struct nvme_dev {
 #ifdef CONFIG_NVME_QOS
 	unsigned int qos_enabled;
 	unsigned int qos_high_weight;
+	unsigned int qos_batch_limit;
+	unsigned int qos_bypass_enter_threshold;
+	unsigned int qos_bypass_exit_threshold;
+	unsigned int qos_bypass_enter_ms;
+	unsigned int qos_bypass_exit_ms;
+	unsigned int qos_max_depth;    /* 0 = use full q_depth */
 #ifdef CONFIG_NVME_QOS_STATS
 	struct dentry *qos_debugfs_dir;
 #endif
@@ -265,6 +271,9 @@ struct nvme_queue {
 	int high_credits;
 	int normal_credits;
 	atomic_t in_flight;
+	unsigned int	qos_bypass;
+	unsigned long	bypass_enter_ts;
+	unsigned long	bypass_exit_ts;
 #ifdef CONFIG_NVME_QOS_STATS
 	/* QoS per-queue statistics (atomic for lock-free reads from debugfs) */
 	struct {
@@ -1277,6 +1286,9 @@ static void nvme_qos_drain_all_queues(struct nvme_dev *dev)
 		int drained;
 
 		spin_lock_irqsave(&nvmeq->sq_lock, flags);
+		nvmeq->qos_bypass = 0;
+		nvmeq->bypass_enter_ts = 0;
+		nvmeq->bypass_exit_ts = 0;
 		drained = nvme_qos_drain_queue_locked(nvmeq);
 		if (drained > 0)
 			nvme_write_sq_db(nvmeq, true);
@@ -1315,13 +1327,27 @@ static bool nvme_qos_is_high_prio(struct request *req)
 	return IOPRIO_PRIO_CLASS(prio) == IOPRIO_CLASS_RT;
 }
 
+/**
+ * Resets the high and normal priority credit counters to their initial values.
+ *
+ * Must be called with sq_lock held.
+ */
 static void nvme_qos_refill_credits(struct nvme_queue *nvmeq)
 {
 	nvmeq->high_credits = nvmeq->dev->qos_high_weight;
 	nvmeq->normal_credits = 1;
 }
 
-static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
+/**
+ * nvme_qos_dequeue_wrr - Dequeue a request using WRR policy
+ * @nvmeq: The NVMe queue to dequeue from
+ * @is_high: Output parameter set to true if the dequeued request is High Priority
+ *
+ * Returns a pointer to the dequeued request, or NULL if both lists are empty.
+ * This function tracks credits for WRR and determines priority status based
+ * on the source list to avoid redundant bio-level priority checks.
+ */
+static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_high)
 {
 	struct request *req = NULL;
 
@@ -1336,6 +1362,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
 		nvmeq->high_credits--;
+		*is_high = true;
 		NQS_INC(nvmeq, high_dispatched);
 		return req;
 	}
@@ -1346,6 +1373,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
 		nvmeq->normal_credits--;
+		*is_high = false;
 		NQS_INC(nvmeq, normal_dispatched);
 		return req;
 	}
@@ -1355,6 +1383,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 		req = list_first_entry(&nvmeq->high_prio_list,
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
+		*is_high = true;
 		NQS_INC(nvmeq, wc_high_fallback);
 		return req;
 	}
@@ -1363,6 +1392,7 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 		req = list_first_entry(&nvmeq->normal_prio_list,
 				       struct request, queuelist);
 		list_del_init(&req->queuelist);
+		*is_high = false;
 		NQS_INC(nvmeq, wc_normal_fallback);
 		return req;
 	}
@@ -1371,36 +1401,91 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq)
 }
 
 /*
+ * nvme_qos_check_enter_bypass - Check if queue should enter low-depth bypass
+ * @nvmeq: The NVMe queue to check
+ *
+ * When both priority lists are empty and in_flight is at or below the enter
+ * threshold, start a timer.  If the condition persists for enter_ms
+ * milliseconds, activate bypass mode so future submissions skip the QoS
+ * classify/enqueue/WRR path entirely.
+ *
+ * Must be called with sq_lock held.
+ */
+static void nvme_qos_check_enter_bypass(struct nvme_queue *nvmeq)
+{
+	struct nvme_dev *ndev = nvmeq->dev;
+	unsigned int enter_thresh = READ_ONCE(ndev->qos_bypass_enter_threshold);
+	unsigned int enter_ms = READ_ONCE(ndev->qos_bypass_enter_ms);
+	unsigned int inflight;
+
+	if (nvmeq->qos_bypass)
+		return;
+
+	/* Only consider bypass if no pending work in lists */
+	if (!list_empty(&nvmeq->high_prio_list) ||
+	    !list_empty(&nvmeq->normal_prio_list))
+		goto reset;
+
+	inflight = atomic_read(&nvmeq->in_flight);
+	if (inflight > enter_thresh)
+		goto reset;
+
+	/* Low-depth condition met — start or check timer */
+	if (!nvmeq->bypass_enter_ts) {
+		nvmeq->bypass_enter_ts = jiffies | 1; /* avoid 0 sentinel */
+		return;
+	}
+
+	if (time_after(jiffies,
+		       nvmeq->bypass_enter_ts + msecs_to_jiffies(enter_ms))) {
+		WRITE_ONCE(nvmeq->qos_bypass, 1);
+		nvmeq->bypass_enter_ts = 0;
+	}
+	return;
+
+reset:
+	nvmeq->bypass_enter_ts = 0;
+}
+
+/*
  * nvme_qos_dispatch - Submit pending QoS requests via WRR scheduling
  * @nvmeq: The NVMe queue to dispatch from
- * @commit: Whether to ring the doorbell after submitting commands.
- *          Pass bd->last from queue_rq to batch doorbells with blk-mq,
- *          or true from kick/submit_batch to ring immediately.
+ * @commit: Batch-level doorbell requirement provided by the caller.
+ * If true, MMIO write is requested. If false, the doorbell will only be rung
+ * if a High Prio request is dispatched or submission queue wraps around.
  *
- * Dequeues up to NVME_QOS_MAX_BATCH requests from the priority lists using
+ * Dequeues up to qos_batch_limit requests from the priority lists using
  * weighted round-robin and copies their commands to the SQ. Writes the SQ
- * doorbell once if any requests were submitted and @commit is true.
+ * doorbell once if any requests were submitted and either @commit is true or
+ * high prio requested or submission queue wraps around.
  *
  * Must be called with sq_lock held.
  */
 static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 {
-	unsigned int depth = nvmeq->q_depth - 1;
+	unsigned int max_depth = nvmeq->dev->qos_max_depth;
+	unsigned int depth = (max_depth && max_depth < nvmeq->q_depth)
+				? max_depth : nvmeq->q_depth - 1;
 	unsigned int submitted = 0;
+	bool high_prio_submitted = false;
 
-	while (submitted < NVME_QOS_MAX_BATCH) {
+	while (submitted < nvmeq->dev->qos_batch_limit) {
 		unsigned int in_flight = atomic_read(&nvmeq->in_flight);
 		struct request *req;
 		struct nvme_iod *iod;
+		bool is_high_prio = false;
 
 		if (in_flight >= depth) {
 			NQS_INC(nvmeq, sq_throttled);
 			break;
 		}
 
-		req = nvme_qos_dequeue_wrr(nvmeq);
+		req = nvme_qos_dequeue_wrr(nvmeq, &is_high_prio);
 		if (!req)
 			break;
+
+		if (is_high_prio)
+			high_prio_submitted = true;
 
 		iod = blk_mq_rq_to_pdu(req);
 		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
@@ -1408,9 +1493,58 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 	}
 
 	if (submitted) {
-		nvme_write_sq_db(nvmeq, commit);
+		nvme_write_sq_db(nvmeq, commit || high_prio_submitted);
 		NQS_INC(nvmeq, doorbells);
 	}
+
+	nvme_qos_check_enter_bypass(nvmeq);
+}
+
+/*
+ * nvme_qos_in_bypass - Check if queue should remain in low-depth bypass
+ * @nvmeq: The NVMe queue to check
+ *
+ * Returns true if bypass should continue (caller should direct-submit).
+ * Returns false if bypass should end (caller should use QoS path).
+ * Handles exit_ms hysteresis timing.
+ *
+ * May be called without sq_lock; uses READ_ONCE/WRITE_ONCE for fields
+ * that are also accessed under lock.
+ */
+static bool nvme_qos_in_bypass(struct nvme_queue *nvmeq)
+{
+	struct nvme_dev *ndev = nvmeq->dev;
+	unsigned int inflight, exit_thresh;
+	unsigned long ts;
+
+	if (!READ_ONCE(nvmeq->qos_bypass))
+		return false;
+
+	inflight = atomic_read(&nvmeq->in_flight);
+	exit_thresh = READ_ONCE(ndev->qos_bypass_exit_threshold);
+
+	if (inflight < exit_thresh) {
+		/* Still low contention — reset exit timer */
+		WRITE_ONCE(nvmeq->bypass_exit_ts, 0);
+		return true;
+	}
+
+	/* Contention building — check exit duration */
+	if (READ_ONCE(ndev->qos_bypass_exit_ms) > 0) {
+		ts = READ_ONCE(nvmeq->bypass_exit_ts);
+		if (!ts) {
+			WRITE_ONCE(nvmeq->bypass_exit_ts, jiffies | 1);
+			return true;
+		}
+		if (!time_after(jiffies,
+				ts + msecs_to_jiffies(
+					READ_ONCE(ndev->qos_bypass_exit_ms))))
+			return true;
+	}
+
+	/* Exit bypass — timer elapsed or exit_ms == 0 (immediate) */
+	WRITE_ONCE(nvmeq->bypass_exit_ts, 0);
+	return false;
 }
 
 /*
@@ -1429,6 +1563,9 @@ static void nvme_qos_kick(struct nvme_queue *nvmeq)
 	u16 old_tail;
 
 	if (!nvmeq->dev->qos_enabled)
+		return;
+
+	if (READ_ONCE(nvmeq->qos_bypass))
 		return;
 
 	/* Quick check without lock - if both lists appear empty, skip */
@@ -1473,15 +1610,20 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 #ifdef CONFIG_NVME_QOS
 	/* Bypass QoS if disabled */
-	if (unlikely(dev->qos_enabled == 0)) {
-		spin_lock_irqsave(&nvmeq->sq_lock, flags);
-		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
-		nvme_write_sq_db(nvmeq, bd->last);
-		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
-		return BLK_STS_OK;
-	}
+	if (unlikely(dev->qos_enabled == 0))
+		goto direct_submit;
+
+	/* Low-depth bypass: skip QoS when no contention */
+	if (nvme_qos_in_bypass(nvmeq))
+		goto direct_submit;
 
 	spin_lock_irqsave(&nvmeq->sq_lock, flags);
+
+	/* Clear bypass if we fell through from bypass exit */
+	if (nvmeq->qos_bypass) {
+		WRITE_ONCE(nvmeq->qos_bypass, 0);
+		nvmeq->bypass_enter_ts = 0;
+	}
 
 	/* Re-check QoS flag under lock to handle disable race */
 	if (unlikely(!READ_ONCE(dev->qos_enabled))) {
@@ -1501,6 +1643,13 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	}
 
 	nvme_qos_dispatch(nvmeq, bd->last);
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+	return BLK_STS_OK;
+
+direct_submit:
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
+	nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+	nvme_write_sq_db(nvmeq, bd->last);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 #else
 	spin_lock(&nvmeq->sq_lock);
@@ -1564,6 +1713,13 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 
 	spin_lock_irqsave(&nvmeq->sq_lock, flags);
 
+	/* Clear bypass if we were routed here due to exit condition */
+	if (nvmeq->qos_bypass) {
+		WRITE_ONCE(nvmeq->qos_bypass, 0);
+		nvmeq->bypass_enter_ts = 0;
+		nvmeq->bypass_exit_ts = 0;
+	}
+
 	/* Re-check under lock to handle disable race */
 	if (unlikely(!READ_ONCE(nvmeq->dev->qos_enabled))) {
 		while ((req = rq_list_pop(rqlist))) {
@@ -1615,7 +1771,8 @@ static void nvme_queue_rqs(struct rq_list *rqlist)
 	while ((req = rq_list_pop(rqlist))) {
 #ifdef CONFIG_NVME_QOS
 		if (nvmeq && nvmeq != req->mq_hctx->driver_data) {
-			if (nvmeq->dev->qos_enabled)
+			if (nvmeq->dev->qos_enabled &&
+			    !nvme_qos_in_bypass(nvmeq))
 				nvme_qos_submit_batch(nvmeq, &submit_list);
 			else
 				nvme_submit_cmds(nvmeq, &submit_list);
@@ -1634,7 +1791,8 @@ static void nvme_queue_rqs(struct rq_list *rqlist)
 
 #ifdef CONFIG_NVME_QOS
 	if (nvmeq) {
-		if (nvmeq->dev->qos_enabled)
+		if (nvmeq->dev->qos_enabled &&
+		    !nvme_qos_in_bypass(nvmeq))
 			nvme_qos_submit_batch(nvmeq, &submit_list);
 		else
 			nvme_submit_cmds(nvmeq, &submit_list);
@@ -2305,6 +2463,9 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 	nvmeq->high_credits = 9;
 	nvmeq->normal_credits = 1;
 	atomic_set(&nvmeq->in_flight, 0);
+	nvmeq->qos_bypass = 0;
+	nvmeq->bypass_enter_ts = 0;
+	nvmeq->bypass_exit_ts = 0;
 #ifdef CONFIG_NVME_QOS_STATS
 	memset(&nvmeq->qos_stats, 0, sizeof(nvmeq->qos_stats));
 #endif
@@ -2364,6 +2525,9 @@ static void nvme_init_queue(struct nvme_queue *nvmeq, u16 qid)
 	nvmeq->high_credits = dev->qos_high_weight;
 	nvmeq->normal_credits = 1;
 	atomic_set(&nvmeq->in_flight, 0);
+	nvmeq->qos_bypass = 0;
+	nvmeq->bypass_enter_ts = 0;
+	nvmeq->bypass_exit_ts = 0;
 #endif
 
 	dev->online_queues++;
@@ -3039,6 +3203,158 @@ static ssize_t qos_weight_store(struct device *dev, struct device_attribute *att
 	return count;
 }
 static DEVICE_ATTR_RW(qos_weight);
+
+static ssize_t qos_max_depth_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%u\n", ndev->qos_max_depth);
+}
+
+static ssize_t qos_max_depth_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	unsigned int val;
+
+	if (kstrtouint(buf, 10, &val) < 0)
+		return -EINVAL;
+
+	WRITE_ONCE(ndev->qos_max_depth, val);
+	dev_info(dev, "NVMe QoS: max depth set to %u (%s)\n",
+		 val, val ? "depth-limited" : "full SQ depth");
+	return count;
+}
+static DEVICE_ATTR_RW(qos_max_depth);
+
+static ssize_t qos_bypass_enter_threshold_show(struct device *dev,
+					       struct device_attribute *attr,
+					       char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%u\n", ndev->qos_bypass_enter_threshold);
+}
+
+static ssize_t qos_bypass_enter_threshold_store(struct device *dev,
+						struct device_attribute *attr,
+						const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	unsigned int val;
+
+	if (kstrtouint(buf, 10, &val) < 0)
+		return -EINVAL;
+
+	if (val >= READ_ONCE(ndev->qos_bypass_exit_threshold))
+		return -EINVAL;
+
+	WRITE_ONCE(ndev->qos_bypass_enter_threshold, val);
+	return count;
+}
+static DEVICE_ATTR_RW(qos_bypass_enter_threshold);
+
+static ssize_t qos_bypass_exit_threshold_show(struct device *dev,
+					      struct device_attribute *attr,
+					      char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%u\n", ndev->qos_bypass_exit_threshold);
+}
+
+static ssize_t qos_bypass_exit_threshold_store(struct device *dev,
+					       struct device_attribute *attr,
+					       const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	unsigned int val;
+
+	if (kstrtouint(buf, 10, &val) < 0)
+		return -EINVAL;
+
+	if (val < 1 || val <= READ_ONCE(ndev->qos_bypass_enter_threshold))
+		return -EINVAL;
+
+	WRITE_ONCE(ndev->qos_bypass_exit_threshold, val);
+	return count;
+}
+static DEVICE_ATTR_RW(qos_bypass_exit_threshold);
+
+static ssize_t qos_bypass_enter_ms_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%u\n", ndev->qos_bypass_enter_ms);
+}
+
+static ssize_t qos_bypass_enter_ms_store(struct device *dev,
+					 struct device_attribute *attr,
+					 const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	unsigned int val;
+
+	if (kstrtouint(buf, 10, &val) < 0)
+		return -EINVAL;
+
+	WRITE_ONCE(ndev->qos_bypass_enter_ms, val);
+	return count;
+}
+static DEVICE_ATTR_RW(qos_bypass_enter_ms);
+
+static ssize_t qos_bypass_exit_ms_show(struct device *dev,
+				       struct device_attribute *attr,
+				       char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%u\n", ndev->qos_bypass_exit_ms);
+}
+
+static ssize_t qos_bypass_exit_ms_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	unsigned int val;
+
+	if (kstrtouint(buf, 10, &val) < 0)
+		return -EINVAL;
+
+	WRITE_ONCE(ndev->qos_bypass_exit_ms, val);
+	return count;
+}
+static DEVICE_ATTR_RW(qos_bypass_exit_ms);
+
+static ssize_t qos_batch_limit_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	return sysfs_emit(buf, "%u\n", ndev->qos_batch_limit);
+}
+
+static ssize_t qos_batch_limit_store(struct device *dev,
+				      struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	unsigned int val;
+
+	if (kstrtouint(buf, 10, &val) < 0)
+		return -EINVAL;
+	if (val < 1)
+		return -EINVAL;
+
+	ndev->qos_batch_limit = val;
+	dev_info(dev, "NVMe QoS: Batch Limit set to %u\n", val);
+	return count;
+}
+static DEVICE_ATTR_RW(qos_batch_limit);
 #endif /* CONFIG_NVME_QOS */
 
 #ifdef CONFIG_NVME_QOS_STATS
@@ -3160,6 +3476,12 @@ static struct attribute *nvme_pci_attrs[] = {
 #ifdef CONFIG_NVME_QOS
 	&dev_attr_qos_enable.attr,
 	&dev_attr_qos_weight.attr,
+	&dev_attr_qos_batch_limit.attr,
+	&dev_attr_qos_bypass_enter_threshold.attr,
+	&dev_attr_qos_bypass_exit_threshold.attr,
+	&dev_attr_qos_bypass_enter_ms.attr,
+	&dev_attr_qos_bypass_exit_ms.attr,
+	&dev_attr_qos_max_depth.attr,
 #endif
 	NULL,
 };
@@ -4018,6 +4340,11 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 #ifdef CONFIG_NVME_QOS
 	dev->qos_enabled = 0;
 	dev->qos_high_weight = 9;
+	dev->qos_batch_limit = NVME_QOS_MAX_BATCH;
+	dev->qos_bypass_enter_threshold = 1;
+	dev->qos_bypass_exit_threshold = 2;
+	dev->qos_bypass_enter_ms = 5;
+	dev->qos_bypass_exit_ms = 0;
 #endif
 
 	return dev;
