@@ -1348,7 +1348,7 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
  * @is_high: Output parameter set to true if the dequeued request is High Priority
  *
  * Returns a pointer to the dequeued request, or NULL if both lists are empty.
- * This function tracks credits for WRR and determines priority status based
+ * This function tracks tokens for WRR and determines priority status based
  * on the source list to avoid redundant bio-level priority checks.
  */
 static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_high)
@@ -3339,7 +3339,7 @@ static ssize_t qos_burst_window_store(struct device *dev, struct device_attribut
 		return -EINVAL;
 
 	ndev->qos_burst_window = val;
-	dev_info(dev, "NVMe QoS: Burst Capacity set to %u\n", val);
+	dev_info(dev, "NVMe QoS: Burst Window set to %u\n", val);
 	return count;
 }
 static DEVICE_ATTR_RW(qos_burst_window);
@@ -3379,7 +3379,6 @@ static struct attribute *nvme_pci_attrs[] = {
 	&dev_attr_qos_bypass_exit_threshold.attr,
 	&dev_attr_qos_bypass_enter_ms.attr,
 	&dev_attr_qos_bypass_exit_ms.attr,
-	&dev_attr_qos_burst_window.attr,
 #endif
 	NULL,
 };
