@@ -156,6 +156,10 @@ class NVMeDevice:
         return f"/sys/class/nvme/{self.controller}/qos_weight"
 
     @property
+    def qos_max_depth_path(self) -> str:
+        return f"/sys/class/nvme/{self.controller}/qos_max_depth"
+
+    @property
     def qos_policy_path(self) -> str:
         return f"/sys/block/{self.namespace}/qos_policy"
 
@@ -185,6 +189,19 @@ class NVMeDevice:
             return False
         return _write_sysfs(self.qos_weight_path, str(weight))
 
+    def get_qos_max_depth(self) -> Optional[int]:
+        """Get current QoS max in-flight depth (0 = full SQ depth)."""
+        if not self.qos_available:
+            return None
+        val = _read_sysfs(self.qos_max_depth_path)
+        return int(val) if val is not None else None
+
+    def set_qos_max_depth(self, depth: int) -> bool:
+        """Set QoS max in-flight depth (0 = use full SQ depth)."""
+        if not self.qos_available:
+            return False
+        return _write_sysfs(self.qos_max_depth_path, str(depth))
+
     def get_qos_policy(self) -> Optional[str]:
         """Get current namespace QoS policy."""
         if not self.qos_available:
@@ -206,6 +223,7 @@ class NVMeDevice:
         self._saved_state = {
             "qos_enabled": self.get_qos_enabled(),
             "qos_weight": self.get_qos_weight(),
+            "qos_max_depth": self.get_qos_max_depth(),
             "qos_policy": self.get_qos_policy(),
         }
 
@@ -220,6 +238,9 @@ class NVMeDevice:
                 success = False
         if self._saved_state["qos_weight"] is not None:
             if not self.set_qos_weight(self._saved_state["qos_weight"]):
+                success = False
+        if self._saved_state.get("qos_max_depth") is not None:
+            if not self.set_qos_max_depth(self._saved_state["qos_max_depth"]):
                 success = False
         if self._saved_state["qos_policy"] is not None:
             if not self.set_qos_policy(self._saved_state["qos_policy"]):

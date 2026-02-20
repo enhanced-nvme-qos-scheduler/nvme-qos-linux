@@ -394,6 +394,7 @@ def _run_interleaved_depth(
         qos_config = {
             "qos_enabled": True,
             "qos_weight": weight,
+            "qos_max_depth": config.qos_max_depth,
             "iodepth": depth,
         }
         if workload_type:
@@ -421,7 +422,8 @@ def _run_interleaved_depth(
         change_str = _color_change(pct_change) if pct_change is not None else ""
         degraded_str = f"  ({len(degraded)} degraded)" if degraded else ""
         util_pct = avg_qos.get('io_util_pct', 0)
-        qos_label = f"qos {buf_tag}w={weight:<2} qd={depth:<3}"
+        md_tag = f" md={config.qos_max_depth}" if config.qos_max_depth else ""
+        qos_label = f"qos {buf_tag}w={weight:<2}{md_tag} qd={depth:<3}"
         line1 = (
             f"{qos_label}: "
             f"p50={format_us(avg_qos['p50_us']):>8} "
@@ -537,9 +539,10 @@ def run_benchmark_suite(
                             "yellow"), file=sys.stderr)
             first_weight = False
 
-            # Set weight once before the depth loop (persists even when QoS disabled)
+            # Set weight and max depth once before the depth loop
             if device.qos_available:
                 device.set_qos_weight(weight)
+                device.set_qos_max_depth(config.qos_max_depth)
 
             for depth in config.depths:
                 if depth < 16 and len(config.depths) > 3:
@@ -1358,6 +1361,8 @@ def cmd_run(args) -> int:
         config.normal_numjobs = args.normal_numjobs
     if args.max_queues:
         config.max_queues = args.max_queues
+    if args.max_depth:
+        config.qos_max_depth = args.max_depth
     if args.normal_bs or args.normal_rw:
         if config.workload_params is None:
             config.workload_params = {}
@@ -1454,6 +1459,7 @@ def cmd_run(args) -> int:
             "iterations": config.iterations,
             "depths": config.depths,
             "weights": config.weights,
+            "qos_max_depth": config.qos_max_depth,
             "high_numjobs": config.high_numjobs,
             "normal_numjobs": config.normal_numjobs,
             "max_queues": config.max_queues,
@@ -1632,7 +1638,9 @@ def _print_analyze_header(input_dir: Path, system_info: Dict, config_info: Dict)
         queue_info = f" queues={hw_q}"
     if jpq:
         queue_info += f" ({jpq} jobs/q)"
-    print(f"Device: {device}  Config: qd={depths} w={weights} jobs={hi_nj}+{norm_nj}"
+    max_depth = config_info.get("qos_max_depth", 0)
+    md_info = f" md={max_depth}" if max_depth else ""
+    print(f"Device: {device}  Config: qd={depths} w={weights}{md_info} jobs={hi_nj}+{norm_nj}"
           f"{queue_info} iter={iters} runtime={runtime}s")
 
     cond_id = config_info.get("condition_id")
@@ -2666,6 +2674,8 @@ def main():
     run_parser.add_argument("--runtime", type=int, help="Seconds per test")
     run_parser.add_argument("--depths", type=int, nargs="+", help="Queue depths to test")
     run_parser.add_argument("--weights", type=int, nargs="+", help="QoS weights to test")
+    run_parser.add_argument("--max-depth", type=int, default=0,
+                           help="QoS max in-flight per queue (0=full SQ depth, e.g. 16 forces host-side queuing)")
     run_parser.add_argument("--buffered", action="store_true",
                            help="Include buffered I/O (page cache) workloads")
     run_parser.add_argument("--high-numjobs", type=int,

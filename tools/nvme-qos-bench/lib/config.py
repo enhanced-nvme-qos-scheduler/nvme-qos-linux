@@ -29,6 +29,9 @@ class BenchmarkConfig:
     # QoS weights to test (if QoS available)
     weights: List[int] = field(default_factory=lambda: [9])
 
+    # QoS max in-flight depth per queue (0 = full SQ depth, no limiting)
+    qos_max_depth: int = 0
+
     # QoS policies to test
     policies: List[str] = field(default_factory=lambda: ["default"])
 
