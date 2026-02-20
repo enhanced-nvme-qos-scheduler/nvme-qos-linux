@@ -4,6 +4,7 @@
  * Copyright (c) 2011-2014, Intel Corporation.
  */
 
+#include "linux/spinlock.h"
 #include <linux/acpi.h>
 #include <linux/async.h>
 #include <linux/blkdev.h>
@@ -311,7 +312,9 @@ struct nvme_iod {
 	struct dma_iova_state meta_dma_state;
 	struct nvme_sgl_desc *meta_descriptor;
 
+#ifdef CONFIG_NVME_QOS
 	struct list_head qos_node;
+#endif
 };
 
 static inline unsigned int nvme_dbbuf_size(struct nvme_dev *dev)
@@ -531,6 +534,14 @@ static int nvme_pci_init_request(struct blk_mq_tag_set *set,
 		unsigned int numa_node)
 {
 	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
+
+#ifdef CONFIG_NVME_QOS
+	/*
+	 * Make sure the qos_node is initialized before adding it to the prio list.
+	 * Do this before bypass so that nvme_pci_complete_rq works everytime
+	 */
+	INIT_LIST_HEAD(&iod->qos_node);
+#endif
 
 	nvme_req(req)->ctrl = set->driver_data;
 	nvme_req(req)->cmd = &iod->cmd;
@@ -1558,12 +1569,6 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 		return ret;
 
 #ifdef CONFIG_NVME_QOS
-	/*
-	 * Make sure the qos_node is initialized before adding it to the prio list.
-	 * Do this before bypass so that nvme_pci_complete_rq works everytime
-	 */
-	INIT_LIST_HEAD(&iod->qos_node);
-
 	/* Bypass QoS if disabled */
 	if (unlikely(dev->qos_enabled == 0))
 		goto direct_submit;
@@ -1767,7 +1772,14 @@ static void nvme_pci_complete_rq(struct request *req)
 	/* Make sure the qos_node is unlinked in the event of a cancel/timeout/etc. */
 	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
 
+#ifdef CONFIG_NVME_QOS
+	unsigned long flags;
+	struct nvme_queue *nvmeq = req->mq_hctx->driver_data;
+
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
 	list_del_init(&iod->qos_node);
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+#endif
 	nvme_pci_unmap_rq(req);
 	nvme_complete_rq(req);
 }
