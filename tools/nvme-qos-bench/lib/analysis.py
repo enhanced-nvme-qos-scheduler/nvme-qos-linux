@@ -117,7 +117,11 @@ def two_sample_ttest(sample1: List[float], sample2: List[float]) -> TTestResult:
     # Welch's t-statistic
     se = math.sqrt(var1/n1 + var2/n2)
     if se == 0:
-        return TTestResult(0, 1.0, False, 0)
+        # Both groups have zero variance — result is deterministic
+        if abs(mean1 - mean2) > 1e-9:
+            return TTestResult(float('inf'), 0.0, True, float('inf'))
+        else:
+            return TTestResult(0.0, 1.0, False, 0.0)
 
     t_stat = (mean1 - mean2) / se
 

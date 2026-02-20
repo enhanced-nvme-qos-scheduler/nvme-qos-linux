@@ -597,7 +597,12 @@ def generate_analysis_report(
                 cpu_deltas.append(r["metrics"]["cpu_pct"] - bl["metrics"]["cpu_pct"])
         if cpu_deltas:
             max_d = max(cpu_deltas)
-            verdict = "PASS (<5pp)" if max_d < 5.0 else f"FAIL (max {max_d:.1f}pp)"
+            if max_d <= 0:
+                verdict = "PASS (CPU decreased)"
+            elif max_d < 5.0:
+                verdict = f"PASS (+{max_d:.2f}pp < 5pp)"
+            else:
+                verdict = f"FAIL (+{max_d:.2f}pp > 5pp threshold)"
             lines.append(f"- **CPU overhead**: {min(cpu_deltas):+.2f}pp to {max_d:+.2f}pp -- {verdict}")
         lines.append("")
 

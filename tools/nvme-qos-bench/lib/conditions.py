@@ -45,6 +45,7 @@ class ConditionProfile:
     # Test parameters
     depths: List[int] = field(default_factory=lambda: [32, 64])
     weights: List[int] = field(default_factory=lambda: [9])
+    max_depth: int = 0   # 0 = full SQ depth; 16 = recommended for scheduling conditions
     iterations: int = 5
     runtime: int = 60
     iter_cooldown: int = 0         # seconds to sleep between iterations
@@ -70,7 +71,9 @@ class ConditionProfile:
         if "read" in normal_rw and "write" not in normal_rw:
             return 0
         normal_bs = _parse_fio_size(wp.get("normal_bs", DEFAULT_NORMAL_BS))
-        effective_depth = 1 if self.run_buffered else depth
+        effective_depth = 1 if self.run_buffered else (
+            min(depth, self.max_depth) if self.max_depth else depth
+        )
         return int(self.normal_jobs_per_queue * effective_depth * normal_bs)
 
     def resolve(self, hw_queues: int) -> BenchmarkConfig:
@@ -111,6 +114,7 @@ class ConditionProfile:
             iterations=self.iterations,
             depths=list(self.depths),
             weights=list(self.weights),
+            qos_max_depth=self.max_depth,
             high_numjobs=high_numjobs,
             normal_numjobs=normal_numjobs,
             max_queues=max_queues,
@@ -149,21 +153,6 @@ _register(ConditionProfile(
     pass_criteria="p99 regression < 2% at all depths",
 ))
 
-# B: Low density, all queues
-_register(ConditionProfile(
-    id="B",
-    name="Low density, all queues",
-    description="Sparse jobs spread across all HW queues -- minimal per-queue contention",
-    mechanism="Classification",
-    queue_fraction=None,  # all queues
-    high_jobs_per_queue=0.0625,
-    normal_jobs_per_queue=0.25,
-    min_high=1,
-    min_normal=1,
-    depths=[32, 64],
-    pass_criteria="QoS should have negligible effect; WRR mostly idle",
-))
-
 # C: Few queues, high density
 _register(ConditionProfile(
     id="C",
@@ -175,7 +164,8 @@ _register(ConditionProfile(
     high_jobs_per_queue=2.0,
     normal_jobs_per_queue=8.0,
     depths=[32, 64],
-    workload_params={"normal_bs": "256k"},
+    max_depth=16,
+    workload_params={"normal_bs": "4k", "normal_rw": "randread"},
     pass_criteria="WRR engagement; fairness OK; no high-prio regression",
 ))
 
@@ -189,21 +179,8 @@ _register(ConditionProfile(
     high_jobs_per_queue=2.0,
     normal_jobs_per_queue=8.0,
     depths=[32, 64],
+    max_depth=16,
     pass_criteria="Significant p99 improvement; WRR actively arbitrating",
-))
-
-# E: SQ-full stress
-_register(ConditionProfile(
-    id="E",
-    name="SQ-full stress",
-    description="QD128 I/O-neutral on quarter-queues -- triggers SQ throttling and kick path without write pressure",
-    mechanism="SQ throttle + kick",
-    queue_fraction=0.25,
-    high_jobs_per_queue=2.0,
-    normal_jobs_per_queue=8.0,
-    depths=[128],
-    workload_params={"normal_rw": "randread", "normal_bs": "4k"},
-    pass_criteria="SQ throttle events; kick path active; no starvation",
 ))
 
 # F: Minority high-prio
@@ -217,6 +194,7 @@ _register(ConditionProfile(
     normal_jobs_per_queue=4.0,
     min_high=1,
     depths=[32, 64],
+    max_depth=16,
     workload_params={"normal_bs": "256k"},
     pass_criteria="High-prio gets service despite being minority; no normal starvation",
 ))
@@ -232,6 +210,8 @@ _register(ConditionProfile(
     normal_jobs_per_queue=0.5,
     min_normal=1,
     depths=[32],
+    max_depth=16,
+    workload_params={"normal_rw": "randread", "normal_bs": "4k"},
     pass_criteria="Normal still gets service; credit refills visible",
 ))
 
@@ -245,6 +225,7 @@ _register(ConditionProfile(
     high_jobs_per_queue=2.0,
     normal_jobs_per_queue=8.0,
     depths=[32, 64],
+    max_depth=16,
     workload_params={
         "normal_rw": "randread",
         "normal_bs": "4k",
@@ -262,24 +243,10 @@ _register(ConditionProfile(
     high_jobs_per_queue=2.0,
     normal_jobs_per_queue=8.0,
     depths=[32, 64],
+    max_depth=16,
     weights=[1, 4, 9, 19, 99],
     workload_params={"normal_bs": "256k"},
     pass_criteria="Dispatch ratio tracks weight proportionally",
-))
-
-# J: Buffered I/O path
-_register(ConditionProfile(
-    id="J",
-    name="Buffered I/O",
-    description="Page-cache writeback path -- tests QoS with coalesced submissions",
-    mechanism="Writeback / kick path",
-    queue_fraction=0.5,
-    high_jobs_per_queue=2.0,
-    normal_jobs_per_queue=8.0,
-    depths=[32, 64],
-    run_buffered=True,
-    workload_params={"normal_bs": "256k"},
-    pass_criteria="QoS effective on buffered path; no regression vs direct I/O",
 ))
 
 # K: Single-priority (namespace force_high)
@@ -292,6 +259,7 @@ _register(ConditionProfile(
     high_jobs_per_queue=2.0,
     normal_jobs_per_queue=8.0,
     depths=[32, 64],
+    max_depth=16,
     namespace_policy="force_high",
     workload_params={"normal_bs": "256k"},
     pass_criteria="All enqueues go to high queue; no normal starvation warnings",

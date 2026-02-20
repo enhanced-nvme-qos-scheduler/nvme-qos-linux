@@ -7,6 +7,7 @@ NVMe QoS Benchmark - Benchmarking for the Linux NVMe QoS scheduler.
 
 import argparse
 import json
+import math
 import os
 import random
 import sys
@@ -775,6 +776,9 @@ def cmd_run_baseline(device: NVMeDevice, args) -> int:
     print("Baseline overhead check: QoS off vs on (single-job, no contention)", file=sys.stderr)
     print_separator()
 
+    n_iters = getattr(args, 'iterations', None) or BASELINE_ITERATIONS
+    runtime = getattr(args, 'runtime', None) or BASELINE_RUNTIME
+
     device.save_state()
     start_time = time.time()
 
@@ -787,15 +791,15 @@ def cmd_run_baseline(device: NVMeDevice, args) -> int:
 
         for depth in BASELINE_DEPTHS:
             depth_iters = []
-            progress = Progress(f"qos=off qd={depth}", BASELINE_ITERATIONS)
+            progress = Progress(f"qos=off qd={depth}", n_iters)
 
-            for iteration in range(BASELINE_ITERATIONS):
+            for iteration in range(n_iters):
                 progress.set(iteration)
 
                 success, fio_data = runner.run_high_priority(
                     iodepth=depth,
                     numjobs=1,
-                    runtime=BASELINE_RUNTIME,
+                    runtime=runtime,
                     ramp_time=BASELINE_RAMP,
                     iteration=iteration,
                 )
@@ -823,15 +827,15 @@ def cmd_run_baseline(device: NVMeDevice, args) -> int:
 
         for depth in BASELINE_DEPTHS:
             depth_iters = []
-            progress = Progress(f"qos=on  qd={depth}", BASELINE_ITERATIONS)
+            progress = Progress(f"qos=on  qd={depth}", n_iters)
 
-            for iteration in range(BASELINE_ITERATIONS):
+            for iteration in range(n_iters):
                 progress.set(iteration)
 
                 success, fio_data = runner.run_high_priority(
                     iodepth=depth,
                     numjobs=1,
-                    runtime=BASELINE_RUNTIME,
+                    runtime=runtime,
                     ramp_time=BASELINE_RAMP,
                     iteration=iteration,
                 )
@@ -939,8 +943,8 @@ def cmd_run_baseline(device: NVMeDevice, args) -> int:
         "pass": all_pass,
         "config": {
             "depths": BASELINE_DEPTHS,
-            "iterations": BASELINE_ITERATIONS,
-            "runtime": BASELINE_RUNTIME,
+            "iterations": n_iters,
+            "runtime": runtime,
             "ramp_time": BASELINE_RAMP,
             "workload": "4K randread, single job",
         },
@@ -1363,6 +1367,8 @@ def cmd_run(args) -> int:
         config.max_queues = args.max_queues
     if args.max_depth:
         config.qos_max_depth = args.max_depth
+        if condition_profile:
+            condition_profile.max_depth = args.max_depth
     if args.normal_bs or args.normal_rw:
         if config.workload_params is None:
             config.workload_params = {}
@@ -1870,14 +1876,20 @@ def _print_significance_section(results: Dict) -> None:
                          + degraded_note)
         else:
             ttest = two_sample_ttest(bl_p99, qos_p99)
-            d_label = _effect_size_label(ttest.effect_size)
-            if ttest.significant:
+            if math.isinf(ttest.effect_size):
                 sig_str = colored(
-                    f"SIGNIFICANT (p<0.05, d={abs(ttest.effect_size):.1f} {d_label})",
+                    "DETERMINISTIC (zero variance, effect fully reproducible)",
                     "green" if pct and pct < 0 else "red"
                 )
             else:
-                sig_str = f"NOT SIGNIFICANT (p>=0.05, d={abs(ttest.effect_size):.1f} {d_label})"
+                d_label = _effect_size_label(ttest.effect_size)
+                if ttest.significant:
+                    sig_str = colored(
+                        f"SIGNIFICANT (p<0.05, d={abs(ttest.effect_size):.1f} {d_label})",
+                        "green" if pct and pct < 0 else "red"
+                    )
+                else:
+                    sig_str = f"NOT SIGNIFICANT (p>=0.05, d={abs(ttest.effect_size):.1f} {d_label})"
             lines.append(f" {label}: p99 {pct_str} -- {sig_str}{degraded_note}")
 
         has_data = True
@@ -2115,11 +2127,13 @@ def _print_analyze_summary(results: Dict, config_info: Optional[Dict] = None) ->
     if cpu_deltas:
         max_delta = max(cpu_deltas)
         delta_str = f"{min(cpu_deltas):+.2f}pp to {max_delta:+.2f}pp"
-        if max_delta < 5.0:
-            delta_str += colored("  PASS (<5pp)", "green")
+        if max_delta <= 0:
+            verdict = colored("  PASS (CPU decreased)", "green")
+        elif max_delta < 5.0:
+            verdict = colored(f"  PASS (+{max_delta:.2f}pp < 5pp)", "green")
         else:
-            delta_str += colored(f"  FAIL (max {max_delta:.1f}pp >= 5pp)", "red")
-        print(f" CPU:      {delta_str}")
+            verdict = colored(f"  FAIL (+{max_delta:.2f}pp > 5pp threshold)", "red")
+        print(f" CPU:      {delta_str}{verdict}")
 
     # Confidence level
     all_results = results.get("all", [])
@@ -2693,7 +2707,7 @@ def main():
     run_parser.add_argument("--baseline", action="store_true",
                            help="Quick overhead check: QD1+QD4 single-job, QoS off vs on (~2 min)")
     run_parser.add_argument("-C", "--condition", metavar="ID",
-                           help="Load condition profile (A-K). Auto-scales to hardware.")
+                           help="Load condition profile (A, C-D, F-I, K). Auto-scales to hardware.")
 
     # Conditions command
     cond_parser = subparsers.add_parser("conditions",
