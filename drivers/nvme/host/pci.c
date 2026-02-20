@@ -1301,15 +1301,14 @@ static void nvme_qos_fail_queued_requests(struct nvme_queue *nvmeq)
 /*
  * Fail queued but not submitted requests from the queues
  * Called during the controller reset/queue reinit for consistent request handling
-*/
+ */
 
 static void nvme_qos_fail_all_queued_requests(struct nvme_dev *dev)
 {
 	unsigned int i;
 
 	/* Process all queues */
-	for (i = 0; i < dev->ctrl.queue_count; i++)
-	{
+	for (i = 0; i < dev->ctrl.queue_count; i++){
 
 		/* Obtain the queue structure for the current queue index */
 		struct nvme_queue *nvmeq = &dev->queues[i];
@@ -2182,16 +2181,14 @@ static void nvme_free_queues(struct nvme_dev *dev, int lowest)
 	int i;
 
 #ifdef CONFIG_NVME_QOS
-	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--)
-	{
+	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--) {
 		struct nvme_queue *nvmeq = &dev->queues[i];
 		if (nvmeq->sq_cmds)
 			nvme_qos_cleanup_queue(nvmeq);
 	}
 #endif
 
-	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--)
-	{
+	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--) {
 		dev->ctrl.queue_count--;
 		nvme_free_queue(&dev->queues[i]);
 	}
