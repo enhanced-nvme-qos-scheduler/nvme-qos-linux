@@ -4,7 +4,7 @@
  * Copyright (c) 2011-2014, Intel Corporation.
  */
 
-#include "linux/cdev.h"
+#include "asm-generic/rwonce.h"
 #include <linux/acpi.h>
 #include <linux/async.h>
 #include <linux/blkdev.h>
@@ -3313,7 +3313,7 @@ static ssize_t qos_batch_limit_store(struct device *dev,
 	if (val < 1)
 		return -EINVAL;
 
-	ndev->qos_batch_limit = val;
+	WRITE_ONCE(ndev->qos_batch_limit, val);
 	dev_info(dev, "NVMe QoS: Batch Limit set to %u\n", val);
 	return count;
 }
@@ -3338,7 +3338,7 @@ static ssize_t qos_burst_window_store(struct device *dev, struct device_attribut
 	if (val == 0)
 		return -EINVAL;
 
-	ndev->qos_burst_window = val;
+	WRITE_ONCE(ndev->qos_burst_window, val);
 	dev_info(dev, "NVMe QoS: Burst Window set to %u\n", val);
 	return count;
 }
