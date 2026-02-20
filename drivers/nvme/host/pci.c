@@ -4,6 +4,7 @@
  * Copyright (c) 2011-2014, Intel Corporation.
  */
 
+#include "linux/cdev.h"
 #include <linux/acpi.h>
 #include <linux/async.h>
 #include <linux/blkdev.h>
@@ -3318,14 +3319,14 @@ static ssize_t qos_batch_limit_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(qos_batch_limit);
 
-static ssize_t qos_burst_cap_show(struct device *dev, struct device_attribute *attr,
+static ssize_t qos_burst_window_show(struct device *dev, struct device_attribute *attr,
 			       char *buf)
 {
 	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
 	return sysfs_emit(buf, "%u\n", ndev->qos_burst_window);
 }
 
-static ssize_t qos_burst_cap_store(struct device *dev, struct device_attribute *attr,
+static ssize_t qos_burst_window_store(struct device *dev, struct device_attribute *attr,
 				const char *buf, size_t count)
 {
 	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
@@ -3341,7 +3342,7 @@ static ssize_t qos_burst_cap_store(struct device *dev, struct device_attribute *
 	dev_info(dev, "NVMe QoS: Burst Capacity set to %u\n", val);
 	return count;
 }
-static DEVICE_ATTR_RW(qos_burst_cap);
+static DEVICE_ATTR_RW(qos_burst_window);
 #endif /* CONFIG_NVME_QOS */
 
 static umode_t nvme_pci_attrs_are_visible(struct kobject *kobj,
@@ -3372,10 +3373,13 @@ static struct attribute *nvme_pci_attrs[] = {
 	&dev_attr_qos_enable.attr,
 	&dev_attr_qos_weight.attr,
 	&dev_attr_qos_batch_limit.attr,
+	&dev_attr_qos_max_depth.attr,
+	&dev_attr_qos_burst_window.attr,
 	&dev_attr_qos_bypass_enter_threshold.attr,
 	&dev_attr_qos_bypass_exit_threshold.attr,
 	&dev_attr_qos_bypass_enter_ms.attr,
 	&dev_attr_qos_bypass_exit_ms.attr,
+	&dev_attr_qos_burst_window.attr,
 #endif
 	NULL,
 };
