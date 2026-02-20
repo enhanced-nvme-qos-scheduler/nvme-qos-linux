@@ -36,7 +36,6 @@ class ConditionProfile:
     # Scaling rules
     queue_fraction: Optional[float] = None   # Fraction of HW queues to use
     min_queues: int = 1
-    max_queues_cap: Optional[int] = None     # Upper bound on active queues
     high_jobs_per_queue: float = 2.0
     normal_jobs_per_queue: float = 8.0
     min_high: int = 1
@@ -95,8 +94,6 @@ class ConditionProfile:
         if self.queue_fraction is not None:
             raw = hw_queues * self.queue_fraction
             active = max(self.min_queues, round(raw))
-            if self.max_queues_cap:
-                active = min(active, self.max_queues_cap)
         else:
             active = hw_queues
 
@@ -165,7 +162,7 @@ _register(ConditionProfile(
     normal_jobs_per_queue=8.0,
     depths=[32, 64],
     max_depth=16,
-    workload_params={"normal_bs": "4k", "normal_rw": "randread"},
+    workload_params={"normal_bs": "256k"},
     pass_criteria="WRR engagement; fairness OK; no high-prio regression",
 ))
 

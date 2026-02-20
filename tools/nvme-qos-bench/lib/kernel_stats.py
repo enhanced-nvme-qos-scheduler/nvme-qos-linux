@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 """Read NVMe QoS kernel counters from debugfs."""
 
+import sys
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -23,6 +24,7 @@ class QoSKernelStats:
         """controller: e.g. 'nvme0'"""
         self.controller = controller
         self._dir = DEBUGFS_BASE / controller
+        self._warned = False
 
     @property
     def available(self) -> bool:
@@ -33,13 +35,32 @@ class QoSKernelStats:
         except PermissionError:
             return False
 
-    def read_raw(self) -> str:
-        """Read raw stats table from debugfs."""
-        return (self._dir / "stats").read_text()
+    def _warn_once(self, reason: str) -> None:
+        """Emit a one-time warning about unavailable stats."""
+        if not self._warned:
+            print(f"Warning: kernel QoS stats unavailable: {reason}", file=sys.stderr)
+            self._warned = True
 
-    def read_per_queue(self) -> list:
-        """Parse stats into a list of per-queue dicts."""
+    def read_raw(self) -> Optional[str]:
+        """Read raw stats table from debugfs. Returns None if unavailable."""
+        try:
+            return (self._dir / "stats").read_text()
+        except PermissionError:
+            self._warn_once("permission denied")
+            return None
+        except FileNotFoundError:
+            self._warn_once("debugfs not mounted or CONFIG_NVME_QOS not enabled")
+            return None
+        except OSError as e:
+            self._warn_once(f"OS error: {e}")
+            return None
+
+    def read_per_queue(self) -> Optional[list]:
+        """Parse stats into a list of per-queue dicts. Returns None if unavailable."""
         text = self.read_raw()
+        if text is None:
+            return None
+
         lines = text.strip().splitlines()
         if len(lines) < 2:
             return []
@@ -56,21 +77,29 @@ class QoSKernelStats:
             rows.append(row)
         return rows
 
-    def read_aggregate(self) -> Dict[str, int]:
-        """Sum counters across all I/O queues."""
+    def read_aggregate(self) -> Optional[Dict[str, int]]:
+        """Sum counters across all I/O queues. Returns None if unavailable."""
         rows = self.read_per_queue()
+        if rows is None:
+            return None
+
         totals = {name: 0 for name in COUNTER_NAMES}
         for row in rows:
             for name in COUNTER_NAMES:
                 totals[name] += row.get(name, 0)
         return totals
 
-    def reset(self) -> None:
-        """Write to stats_reset to zero all counters."""
-        reset_file = self._dir / "stats_reset"
-        reset_file.write_text("1")
+    def reset(self) -> bool:
+        """Write to stats_reset to zero all counters. Returns True if successful."""
+        try:
+            reset_file = self._dir / "stats_reset"
+            reset_file.write_text("1")
+            return True
+        except (PermissionError, FileNotFoundError, OSError) as e:
+            self._warn_once(f"cannot reset counters: {e}")
+            return False
 
-    def snapshot(self) -> Dict[str, int]:
+    def snapshot(self) -> Optional[Dict[str, int]]:
         """Take a snapshot for delta calculation. Alias for read_aggregate."""
         return self.read_aggregate()
 

@@ -120,37 +120,40 @@ class UserPreferences:
         self.save()
 
 
-def get_config_path(name: str) -> Path:
-    """Get path to a named config file."""
-    base = Path(__file__).parent.parent / "configs"
-    path = base / f"{name}.yaml"
-    if path.exists():
-        return path
-    # Try with .yaml extension added
-    if not name.endswith(".yaml"):
-        path = base / f"{name}.yaml"
-    return path
-
-
 def load_config(name_or_path: str) -> BenchmarkConfig:
-    """Load config by name (quick/default/full) or path."""
+    """Load config by name (quick/default/full/stress) or YAML file path."""
+    # Resolve built-in preset names first (single source of truth)
+    _PRESETS = {
+        "quick": lambda: QUICK_CONFIG,
+        "default": lambda: DEFAULT_CONFIG,
+        "full": lambda: FULL_CONFIG,
+        "stress": lambda: STRESS_CONFIG,
+    }
+    key = name_or_path.lower()
+    if key in _PRESETS:
+        return _PRESETS[key]()
+
+    # Fall back to YAML file
     path = Path(name_or_path)
-    if path.exists():
-        return BenchmarkConfig.from_yaml(path)
-    # Try as named config
-    path = get_config_path(name_or_path)
     if path.exists():
         return BenchmarkConfig.from_yaml(path)
     raise FileNotFoundError(f"Config not found: {name_or_path}")
 
 
 # Quick preset for fast sanity checks
+# 2 high + 8 normal per queue (via max_queues=2): normal demand >> 10% allocation,
+# ensuring the normal queue is perpetually non-empty so WRR fires on every dispatch.
 QUICK_CONFIG = BenchmarkConfig(
     runtime=30,
     ramp_time=3,
     iterations=2,
     depths=[16, 32],
     weights=[9],
+    high_numjobs=4,
+    normal_numjobs=16,
+    max_queues=2,
+    qos_max_depth=8,
+    workload_params={"normal_rw": "randread", "normal_bs": "4k"},
     run_baseline=True,
     run_qos=True,
     run_cpu_overhead=False,
@@ -158,12 +161,18 @@ QUICK_CONFIG = BenchmarkConfig(
 )
 
 # Default config for standard benchmarks
+# Same 2:8 high:normal per-queue ratio as condition C (proven to produce WRR engagement).
 DEFAULT_CONFIG = BenchmarkConfig(
     runtime=60,
     ramp_time=5,
     iterations=5,
     depths=[16, 32, 64],
     weights=[9],
+    high_numjobs=4,
+    normal_numjobs=16,
+    max_queues=2,
+    qos_max_depth=8,
+    workload_params={"normal_rw": "randread", "normal_bs": "4k"},
 )
 
 # Full sweep config

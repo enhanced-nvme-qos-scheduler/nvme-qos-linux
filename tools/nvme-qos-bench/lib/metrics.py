@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 """Metrics extraction from fio JSON output."""
 
+import sys
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
 
@@ -45,11 +46,38 @@ def _ns_to_us(ns: float) -> float:
 
 
 def _extract_percentile(clat_ns: Dict, percentile: float) -> float:
-    """Extract latency percentile from fio clat_ns percentiles."""
+    """Extract latency percentile from fio clat_ns percentiles.
+
+    Uses tolerance-based lookup to handle varying FIO output formats
+    (e.g., "99", "99.0", "99.000000").
+    """
     percentiles = clat_ns.get("percentile", {})
-    # fio uses string keys like "99.000000"
-    key = f"{percentile:.6f}"
-    return _ns_to_us(float(percentiles.get(key, 0)))
+    if not percentiles:
+        return 0.0
+
+    # Try to find the key closest to the target percentile
+    # FIO may output keys as "99.000000", "99.0", or "99"
+    TOLERANCE = 0.001
+    best_match = None
+    best_diff = float('inf')
+
+    for key_str in percentiles.keys():
+        try:
+            key_value = float(key_str)
+            diff = abs(key_value - percentile)
+            if diff < best_diff:
+                best_diff = diff
+                best_match = key_str
+        except (ValueError, TypeError):
+            # Ignore non-numeric keys
+            continue
+
+    if best_match is not None and best_diff < TOLERANCE:
+        return _ns_to_us(float(percentiles[best_match]))
+
+    # No close match found - log warning and return 0
+    print(f"Warning: percentile p{percentile} not found in FIO output (available: {list(percentiles.keys())[:5]}...)", file=sys.stderr)
+    return 0.0
 
 
 def extract_job_metrics(job: Dict[str, Any]) -> JobMetrics:
@@ -95,6 +123,10 @@ def extract_fio_metrics(fio_json: Dict[str, Any]) -> FioMetrics:
     jobs = [extract_job_metrics(j) for j in jobs_data]
 
     # Identify high-priority and normal-priority jobs by name
+    # Job names from templates:
+    #   - high-prio-reads     → high priority
+    #   - normal-prio-writes  → normal priority
+    #   - cpu-overhead-test   → unclassified (treat as normal/neutral)
     high_prio = None
     normal_prio = None
     high_prio_jobs = []
@@ -102,10 +134,14 @@ def extract_fio_metrics(fio_json: Dict[str, Any]) -> FioMetrics:
 
     for jm in jobs:
         name_lower = jm.job_name.lower()
-        if "high" in name_lower or "prio" in name_lower and "normal" not in name_lower:
+        # Case-insensitive prefix/substring match
+        if name_lower.startswith("high") or ("high" in name_lower and "normal" not in name_lower):
             high_prio_jobs.append(jm)
-        elif "normal" in name_lower or "bulk" in name_lower:
+        elif name_lower.startswith("normal") or "bulk" in name_lower:
             normal_prio_jobs.append(jm)
+        else:
+            # Unclassified job - log a warning
+            print(f"Warning: Job '{jm.job_name}' does not match high/normal priority patterns, skipping classification", file=sys.stderr)
 
     # Aggregate high-priority jobs if multiple
     if high_prio_jobs:

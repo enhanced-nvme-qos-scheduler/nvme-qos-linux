@@ -4,12 +4,15 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from jinja2 import Environment, FileSystemLoader
+
+from .constants import FIO_TIMEOUT_MULTIPLIER, FIO_TIMEOUT_BUFFER_SEC, FIO_STDERR_LINES_ON_ERROR
 
 # Template directory
 TEMPLATES_DIR = Path(__file__).parent.parent / "jobs"
@@ -72,7 +75,7 @@ def run_fio(job_file: Path, output_json: Path,
             timeout: Optional[int] = None) -> tuple[bool, Optional[Dict[str, Any]]]:
     """Run fio with a job file and return parsed JSON output.
 
-    Returns (success, json_data) tuple.
+    Returns (success, json_data) tuple. On failure, prints stderr to help debug.
     """
     cmd = [
         "fio",
@@ -90,16 +93,31 @@ def run_fio(job_file: Path, output_json: Path,
         )
 
         if result.returncode != 0:
+            # Surface stderr to help debug fio failures
+            if result.stderr:
+                stderr_lines = result.stderr.strip().split('\n')
+                shown_lines = stderr_lines[-FIO_STDERR_LINES_ON_ERROR:]
+                print(f"FIO failed with exit code {result.returncode}. Last {len(shown_lines)} stderr lines:", file=sys.stderr)
+                for line in shown_lines:
+                    print(f"  {line}", file=sys.stderr)
+            else:
+                print(f"FIO failed with exit code {result.returncode} (no stderr)", file=sys.stderr)
             return False, None
 
         # Parse JSON output
-        with open(output_json) as f:
-            data = json.load(f)
-        return True, data
+        try:
+            with open(output_json) as f:
+                data = json.load(f)
+            return True, data
+        except json.JSONDecodeError as e:
+            print(f"Failed to parse FIO JSON output: {e}", file=sys.stderr)
+            return False, None
 
     except subprocess.TimeoutExpired:
+        print(f"FIO timed out after {timeout}s", file=sys.stderr)
         return False, None
-    except (OSError, json.JSONDecodeError) as e:
+    except OSError as e:
+        print(f"Failed to run FIO: {e}", file=sys.stderr)
         return False, None
 
 
@@ -114,7 +132,7 @@ class FioRunner:
 
     def _run_job(self, name: str, template: str, params: Dict[str, Any],
                  iteration: int = 0) -> tuple[bool, Optional[Dict[str, Any]]]:
-        """Run a single FIO job."""
+        """Run a single FIO job and clean up temp files."""
         # Create job file
         job_file = self.raw_dir / f"{name}_iter{iteration}.fio"
         json_file = self.raw_dir / f"{name}_iter{iteration}.json"
@@ -122,10 +140,21 @@ class FioRunner:
         job_params = FioJobParams(device=self.device, **params)
         generate_job_file(template, job_params, job_file)
 
-        # Calculate timeout (2x runtime + ramp + buffer)
-        timeout = (params.get('runtime', 60) + params.get('ramp_time', 5)) * 2 + 60
+        # Calculate timeout using constants
+        runtime = params.get('runtime', 60)
+        ramp_time = params.get('ramp_time', 5)
+        timeout = (runtime + ramp_time) * FIO_TIMEOUT_MULTIPLIER + FIO_TIMEOUT_BUFFER_SEC
 
-        return run_fio(job_file, json_file, timeout)
+        try:
+            success, data = run_fio(job_file, json_file, timeout)
+            return success, data
+        finally:
+            # Clean up temp .fio file (keep .json for analysis)
+            if job_file.exists():
+                try:
+                    job_file.unlink()
+                except OSError:
+                    pass  # Best effort cleanup
 
     def run_high_priority(self, iodepth: int = 16, numjobs: int = 1,
                           runtime: int = 60, ramp_time: int = 5,
@@ -210,22 +239,7 @@ class FioRunner:
             params.update(workload_params)
         return self._run_job(
             name=name,
-            template="mmap_workload.fio.j2",
+            template="buffered_workload.fio.j2",
             params=params,
-            iteration=iteration,
-        )
-
-    def run_cpu_overhead(self, runtime: int = 60, ramp_time: int = 5,
-                         iteration: int = 0) -> tuple[bool, Optional[Dict]]:
-        """Run CPU overhead test: low-depth single job."""
-        return self._run_job(
-            name="cpu_overhead",
-            template="cpu_overhead.fio.j2",
-            params={
-                "iodepth": 1,
-                "numjobs": 1,
-                "runtime": runtime,
-                "ramp_time": ramp_time,
-            },
             iteration=iteration,
         )

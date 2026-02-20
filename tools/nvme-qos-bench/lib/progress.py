@@ -20,13 +20,43 @@ def colored(st: str, color: str, bold: bool = False) -> str:
         return f"\033[1;{code}m{st}\033[0m"
     return f"\033[{code}m{st}\033[0m"
 
-def si_format(num: float, suffix: str = "", precision: int = 1) -> str:
-    """Format number with SI prefix (K/M/G/T)."""
+def si_format(num: float, suffix: str = "", precision: int = None) -> str:
+    """Format number with SI prefix (K/M/G/T).
+
+    Args:
+        num: Number to format
+        suffix: Optional suffix to append (e.g., "B" for bytes)
+        precision: Decimal places. If None, uses smart precision:
+                   - integers with K/M/G/T and value >= 10: 0 decimals (e.g., "15K")
+                   - small K values (< 10K): 1 decimal (e.g., "5.4K")
+                   - M/G/T values: 1 decimal (e.g., "1.5M")
+                   - raw integers (no unit): 0 decimals (e.g., "500")
+                   - floats: 1 decimal
+    """
+    original_is_int = isinstance(num, int) or (isinstance(num, float) and num == int(num))
+
     for unit in ['', 'K', 'M', 'G', 'T']:
         if abs(num) < 1000:
-            return f"{num:.{precision}f}{unit}{suffix}"
+            # Check if scaled value is also an integer
+            scaled_is_int = num == int(num)
+
+            # Determine precision if not specified
+            if precision is None:
+                if unit == '':
+                    # Raw value with no unit - use 0 decimals for ints
+                    prec = 0 if original_is_int else 1
+                elif scaled_is_int:
+                    # Scaled value is an integer (5.0, 15.0, etc.) - no decimals
+                    prec = 0
+                else:
+                    # Fractional values - 1 decimal (e.g., 5.4K, 1.5M)
+                    prec = 1
+            else:
+                prec = precision
+
+            return f"{num:.{prec}f}{unit}{suffix}"
         num /= 1000
-    return f"{num:.{precision}f}P{suffix}"
+    return f"{num:.{precision or 1}f}P{suffix}"
 
 def format_us(us: float) -> str:
     """Format microseconds with appropriate unit."""
@@ -134,30 +164,19 @@ def timing(desc: str = ""):
     if desc:
         print(f"{desc}: {elapsed:.2f}s", file=sys.stderr)
 
-def print_header(device: str, kernel: str, qos_available: bool) -> None:
+def print_header(device: str, kernel: str, qos_available: bool, ks_available: Optional[bool] = None) -> None:
     """Print benchmark header line."""
     from . import __version__
     qos_status = colored("available", "green") if qos_available else colored("unavailable", "yellow")
-    print(f"nvme-qos-bench v{__version__} | {device} | kernel {kernel} | QoS: {qos_status}", file=sys.stderr)
+    line = f"nvme-qos-bench v{__version__} | {device} | kernel {kernel} | QoS: {qos_status}"
+    if ks_available is not None:
+        ks_status = colored("available", "green") if ks_available else colored("not available", "yellow")
+        line += f" | counters: {ks_status}"
+    print(line, file=sys.stderr)
 
 def print_warning(msg: str) -> None:
     """Print warning message."""
     print(colored(f"WARNING: {msg}", "yellow"), file=sys.stderr)
-
-def print_result(label: str, p50_us: float, p90_us: float, p99_us: float, p999_us: float,
-                 iops: float, cpu_pct: float, runtime: float,
-                 p99_change: Optional[float] = None) -> None:
-    """Print single result line in dense format."""
-    line = (f"{label:<18} "
-            f"p50={format_us(p50_us):>8} "
-            f"p90={format_us(p90_us):>8} "
-            f"p99={format_us(p99_us):>8} "
-            f"p999={format_us(p999_us):>8} "
-            f"iops={si_format(iops):>8} "
-            f"cpu={cpu_pct:5.1f}% [{runtime:.1f}s]")
-    if p99_change is not None:
-        line += f"  {format_pct_change(1.0, 1.0 + p99_change/100)}"
-    print(line, file=sys.stderr)
 
 def print_separator() -> None:
     """Print separator line."""
@@ -173,3 +192,7 @@ def print_summary(p99_range: tuple, iops_range: tuple, cpu_range: tuple,
     if norm_p99_range:
         parts.append(f"norm_p99 {norm_p99_range[0]:+.1f}% to {norm_p99_range[1]:+.1f}%")
     print(f"summary: {' | '.join(parts)}", file=sys.stderr)
+
+def print_status(msg: str) -> None:
+    """Print status/progress message to stderr."""
+    print(msg, file=sys.stderr)
