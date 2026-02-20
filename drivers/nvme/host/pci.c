@@ -200,7 +200,7 @@ struct nvme_dev {
 	unsigned int qos_bypass_exit_threshold;
 	unsigned int qos_bypass_enter_ms;
 	unsigned int qos_bypass_exit_ms;
-	unsigned int qos_burst_cap;
+	unsigned int qos_burst_window;
 #endif
 
 	struct nvme_descriptor_pools descriptor_pools[];
@@ -1316,7 +1316,7 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 	unsigned long delta = now - nvmeq->last_refill_jiffies;
 	unsigned int high_rate = nvmeq->dev->qos_high_weight;
 	unsigned int normal_rate = 10 - high_rate;
-	unsigned int burst_window = nvmeq->dev->qos_burst_cap;
+	unsigned int burst_window = nvmeq->dev->qos_burst_window;
 	unsigned int high_cap = high_rate * burst_window;
 	unsigned int normal_cap = normal_rate * burst_window;
 
@@ -1370,11 +1370,11 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_h
 
 	if (normal_pending) {
 		req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
-			list_del_init(&req->queuelist);
-			if (nvmeq->normal_tokens > 0)
-				nvmeq->normal_tokens--;
-			*is_high = false;
-			return req;
+		list_del_init(&req->queuelist);
+		if (nvmeq->normal_tokens > 0)
+			nvmeq->normal_tokens--;
+		*is_high = false;
+		return req;
 	}
 
 	return NULL;
@@ -3294,7 +3294,7 @@ static ssize_t qos_burst_cap_show(struct device *dev, struct device_attribute *a
 			       char *buf)
 {
 	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
-	return sysfs_emit(buf, "%u\n", ndev->qos_burst_cap);
+	return sysfs_emit(buf, "%u\n", ndev->qos_burst_window);
 }
 
 static ssize_t qos_burst_cap_store(struct device *dev, struct device_attribute *attr,
@@ -3309,7 +3309,7 @@ static ssize_t qos_burst_cap_store(struct device *dev, struct device_attribute *
 	if (val == 0)
 		return -EINVAL;
 
-	ndev->qos_burst_cap = val;
+	ndev->qos_burst_window = val;
 	dev_info(dev, "NVMe QoS: Burst Capacity set to %u\n", val);
 	return count;
 }
@@ -4212,7 +4212,7 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 	dev->qos_bypass_exit_threshold = 2;
 	dev->qos_bypass_enter_ms = 5;
 	dev->qos_bypass_exit_ms = 0;
-	dev->qos_burst_cap = HZ / 10;
+	dev->qos_burst_window = HZ / 10;
 #endif
 
 	return dev;
