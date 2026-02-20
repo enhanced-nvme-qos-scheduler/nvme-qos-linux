@@ -201,7 +201,8 @@ struct nvme_dev {
 	unsigned int qos_bypass_exit_threshold;
 	unsigned int qos_bypass_enter_ms;
 	unsigned int qos_bypass_exit_ms;
-	unsigned int qos_burst_cap;
+	unsigned int qos_burst_window;
+	unsigned int qos_max_depth;    /* 0 = use full q_depth */
 #endif
 
 	struct nvme_descriptor_pools descriptor_pools[];
@@ -1304,7 +1305,7 @@ static bool nvme_qos_is_high_prio(struct request *req)
 }
 
 /*
- * nvme_qos_update_tokens - Refill the High Priority token bucket based on time
+ * nvme_qos_update_tokens - Refill High and Normal Priority token bucket based on time
  * @nvmeq: The NVMe queue to update
  *
  * Calculates time delta since last refill in jiffies and adds tokens
@@ -1317,18 +1318,28 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 	unsigned long now = jiffies;
 	unsigned long delta = now - nvmeq->last_refill_jiffies;
 	unsigned int high_rate = nvmeq->dev->qos_high_weight;
-	unsigned int cap = nvmeq->dev->qos_burst_cap;
+	unsigned int normal_rate = 10 - high_rate;
+	unsigned int burst_window = nvmeq->dev->qos_burst_window;
+	unsigned int high_cap = high_rate * burst_window;
+	unsigned int normal_cap = normal_rate * burst_window;
 
 	if (!delta)
 		return;
 
 	nvmeq->last_refill_jiffies = now;
 
-	if (nvmeq->high_tokens < cap) {
+	if (nvmeq->high_tokens < high_cap) {
 		s64 new_tokens = (s64)delta * high_rate;
 		nvmeq->high_tokens += new_tokens;
-		if (nvmeq->high_tokens > cap)
-			nvmeq->high_tokens = cap;
+		if (nvmeq->high_tokens > high_cap)
+			nvmeq->high_tokens = high_cap;
+	}
+
+	if (nvmeq->normal_tokens < normal_cap) {
+		s64 new_tokens = (s64)delta * normal_rate;
+		nvmeq->normal_tokens += new_tokens;
+		if (nvmeq->normal_tokens > normal_cap)
+			nvmeq->normal_tokens = normal_cap;
 	}
 }
 
@@ -1460,7 +1471,9 @@ reset:
  */
 static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 {
-	unsigned int depth = nvmeq->q_depth - 1;
+	unsigned int max_depth = nvmeq->dev->qos_max_depth;
+	unsigned int depth = (max_depth && max_depth < nvmeq->q_depth)
+				? max_depth : nvmeq->q_depth - 1;
 	unsigned int submitted = 0;
 	bool high_prio_submitted = false;
 
@@ -3197,6 +3210,31 @@ static ssize_t qos_normal_weight_store(struct device *dev, struct device_attribu
 }
 static DEVICE_ATTR_RW(qos_normal_weight);
 
+static ssize_t qos_max_depth_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%u\n", ndev->qos_max_depth);
+}
+
+static ssize_t qos_max_depth_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	unsigned int val;
+
+	if (kstrtouint(buf, 10, &val) < 0)
+		return -EINVAL;
+
+	WRITE_ONCE(ndev->qos_max_depth, val);
+	dev_info(dev, "NVMe QoS: max depth set to %u (%s)\n",
+		 val, val ? "depth-limited" : "full SQ depth");
+	return count;
+}
+static DEVICE_ATTR_RW(qos_max_depth);
+
 static ssize_t qos_bypass_enter_threshold_show(struct device *dev,
 					       struct device_attribute *attr,
 					       char *buf)
@@ -3328,7 +3366,7 @@ static ssize_t qos_burst_cap_show(struct device *dev, struct device_attribute *a
 			       char *buf)
 {
 	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
-	return sysfs_emit(buf, "%u\n", ndev->qos_burst_cap);
+	return sysfs_emit(buf, "%u\n", ndev->qos_burst_window);
 }
 
 static ssize_t qos_burst_cap_store(struct device *dev, struct device_attribute *attr,
@@ -3343,7 +3381,7 @@ static ssize_t qos_burst_cap_store(struct device *dev, struct device_attribute *
 	if (val == 0)
 		return -EINVAL;
 
-	ndev->qos_burst_cap = val;
+	ndev->qos_burst_window = val;
 	dev_info(dev, "NVMe QoS: Burst Capacity set to %u\n", val);
 	return count;
 }
@@ -3383,7 +3421,6 @@ static struct attribute *nvme_pci_attrs[] = {
 	&dev_attr_qos_bypass_exit_threshold.attr,
 	&dev_attr_qos_bypass_enter_ms.attr,
 	&dev_attr_qos_bypass_exit_ms.attr,
-	&dev_attr_qos_burst_cap.attr,
 #endif
 	NULL,
 };
@@ -4248,7 +4285,7 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 	dev->qos_bypass_exit_threshold = 2;
 	dev->qos_bypass_enter_ms = 5;
 	dev->qos_bypass_exit_ms = 0;
-	dev->qos_burst_cap = dev->qos_high_weight * (HZ / 10);
+	dev->qos_burst_window = HZ / 10;
 #endif
 
 	return dev;
