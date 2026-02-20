@@ -1,0 +1,13 @@
+# so sandbox
+FROM ubuntu:24.04
+
+RUN apt-get update -qq \
+  && apt-get install -y --no-install-recommends sudo curl ca-certificates \
+  && (id ubuntu >/dev/null 2>&1 || useradd -m -s /bin/bash -u 1000 ubuntu) \
+  && echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+USER ubuntu
+SHELL ["/bin/bash", "-c"]
+RUN bash <(curl -fsSL https://raw.githubusercontent.com/arvinmi/so/main/src/templates/so-tools.sh)
+
+CMD ["bash"]
