@@ -4,7 +4,6 @@
  * Copyright (c) 2011-2014, Intel Corporation.
  */
 
-#include "linux/cdev.h"
 #include <linux/acpi.h>
 #include <linux/async.h>
 #include <linux/blkdev.h>
