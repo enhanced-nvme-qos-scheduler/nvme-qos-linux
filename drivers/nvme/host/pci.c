@@ -1270,24 +1270,26 @@ static void nvme_qos_drain_all_queues(struct nvme_dev *dev)
 }
 
 /*
- * Queued nut not submitted requests need to be failed during the
+ * Queued but not submitted requests need to be failed during the
  * controller reset/queue reinit for consistent request handling
 */
 
-static void nvme_qos_fail_queued_requests(struct nvme_queue *nvmeq){
+static void nvme_qos_fail_queued_requests(struct nvme_queue *nvmeq)
+{
 	
 	LIST_HEAD(local);
-	// Move all pending requests from the queue to a local list to minimize lock hold time
+	/* Move all pending requests from the queue to a local list to minimize lock hold time */
 	struct request *req;
 	unsigned long flags;
 
-	// Process high priority list and low priority list
+	/* Process high priority list and low priority list */
 	sin_lock_irqsave(&nvmeq->sq_lock, flags);
 	list_splice_init(&nvmeq->high_prio_list, &local);
 	list_splice_init(&nvmeq->normal_prio_list, &local);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 
-	while (!list_empty(&local)){
+	while (!list_empty(&local))
+	{
 		req = list_first_entry(&local, struct request, queuelist);
 		list_del_init(&req->queuelist);
 		nvme_req(req)->status = NVME_SC_HOST_ABORTED_CMD;
@@ -1301,17 +1303,19 @@ static void nvme_qos_fail_queued_requests(struct nvme_queue *nvmeq){
  * Called during the controller reset/queue reinit for consistent request handling
 */
 
-static void nvme_qos_fail_all_queued_requests(struct nvme_dev *dev){
+static void nvme_qos_fail_all_queued_requests(struct nvme_dev *dev)
+{
 	unsigned int i;
 
-	// Process all queues
-	for (i = 0; i < dev->ctrl.queue_count; i++){
+	/* Process all queues */
+	for (i = 0; i < dev->ctrl.queue_count; i++)
+	{
 
-		// Obtain the queue structure for the current queue index
+		/* Obtain the queue structure for the current queue index */
 		struct nvme_queue *nvmeq = &dev->queues[i];
 
 		if (!nvmeq->sq_cmds)
-			continue; // Skip queues that are not initialized
+			continue; /* Skip queues that are not initialized */
 
 		nvme_qos_fail_queued_requests(nvmeq);
 	}
@@ -2178,14 +2182,16 @@ static void nvme_free_queues(struct nvme_dev *dev, int lowest)
 	int i;
 
 #ifdef CONFIG_NVME_QOS
-	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--){
+	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--)
+	{
 		struct nvme_queue *nvmeq = &dev->queues[i];
 		if (nvmeq->sq_cmds)
 			nvme_qos_cleanup_queue(nvmeq);
 	}
 #endif
 
-	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--) {
+	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--)
+	{
 		dev->ctrl.queue_count--;
 		nvme_free_queue(&dev->queues[i]);
 	}
@@ -2203,7 +2209,7 @@ static void nvme_suspend_queue(struct nvme_dev *dev, unsigned int qid)
 
 #ifdef CONFIG_NVME_QOS
 
-	// Fail queded but not submitted requests before suspending to avoid stalling on a frozen queue
+	/* Fail queued but not submitted requests before suspending to avoid stalling on a frozen queue */
 	nvme_qos_fail_queued_requests(nvmeq);
 #endif
 
@@ -3009,8 +3015,8 @@ static ssize_t qos_enable_store(struct device *dev, struct device_attribute *att
 
 	/* When disabling QoS, drain pending requests first */
 	if (!enable && ndev->qos_enabled) {
-		// Set flag first to prevent new enqueues and
-		// ensure flag visible before drain
+		/* Set flag first to prevent new enqueues and */
+		/* ensure flag visible before drain */
 		WRITE_ONCE(ndev->qos_enabled, 0);
 		smp_mb();
 		nvme_qos_drain_all_queues(ndev);
@@ -3654,8 +3660,9 @@ static void nvme_reset_work(struct work_struct *work)
 
 #ifdef CONFIG_NVME_QOS
 
-		// Fail any queued requests before disable to avoid blocking shutdown on
-		// pending requests that won't be completed due to reset
+		/* Fail any queued requests before disable to avoid blocking shutdown on
+		* pending requests that won't be completed due to reset
+		*/
 		nvme_qos_fail_all_queued_requests(dev);
 #endif
 		nvme_dev_disable(dev, false);
@@ -4093,7 +4100,8 @@ static void nvme_reset_prepare(struct pci_dev *pdev)
 
 	/*
 	 * We don't need to check the return value from waiting for the reset
-	/* Fail any queued-but-not-submitted requests before disable */
+	 * Fail any queued-but-not-submitted requests before disable
+	 */
 	nvme_qos_fail_all_queued_requests(dev);
 #endif
 	nvme_disable_prepare_reset(dev, false);
