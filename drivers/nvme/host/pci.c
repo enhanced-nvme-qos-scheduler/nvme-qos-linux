@@ -1269,6 +1269,54 @@ static void nvme_qos_drain_all_queues(struct nvme_dev *dev)
 			 total);
 }
 
+/*
+ * Queued nut not submitted requests need to be failed during the
+ * controller reset/queue reinit for consistent request handling
+*/
+
+static void nvme_qos_fail_queued_requests(struct nvme_queue *nvmeq){
+	
+	LIST_HEAD(local);
+	// Move all pending requests from the queue to a local list to minimize lock hold time
+	struct request *req;
+	unsigned long flags;
+
+	// Process high priority list and low priority list
+	sin_lock_irqsave(&nvmeq->sq_lock, flags);
+	list_splice_init(&nvmeq->high_prio_list, &local);
+	list_splice_init(&nvmeq->normal_prio_list, &local);
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+
+	while (!list_empty(&local)){
+		req = list_first_entry(&local, struct request, queuelist);
+		list_del_init(&req->queuelist);
+		nvme_req(req)->status = NVME_SC_HOST_ABORTED_CMD;
+		nvme_req(req)->flags |= NVME_REQ_COMPLETE;
+		blk_mq_complete_request(req);
+	}
+}
+
+/*
+ * Fail queued but not submitted requests from the queues
+ * Called during the controller reset/queue reinit for consistent request handling
+*/
+
+static void nvme_qos_fail_all_queued_requests(struct nvme_dev *dev){
+	unsigned int i;
+
+	// Process all queues
+	for (i = 0; i < dev->ctrl.queue_count; i++){
+
+		// Obtain the queue structure for the current queue index
+		struct nvme_queue *nvmeq = &dev->queues[i];
+
+		if (!nvmeq->sq_cmds)
+			continue; // Skip queues that are not initialized
+
+		nvme_qos_fail_queued_requests(nvmeq);
+	}
+}
+
 #define NVME_QOS_MAX_BATCH 4
 
 static bool nvme_qos_is_high_prio(struct request *req)
@@ -2129,6 +2177,14 @@ static void nvme_free_queues(struct nvme_dev *dev, int lowest)
 {
 	int i;
 
+#ifdef CONFIG_NVME_QOS
+	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--){
+		struct nvme_queue *nvmeq = &dev->queues[i];
+		if (nvmeq->sq_cmds)
+			nvme_qos_cleanup_queue(nvmeq);
+	}
+#endif
+
 	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--) {
 		dev->ctrl.queue_count--;
 		nvme_free_queue(&dev->queues[i]);
@@ -2144,6 +2200,12 @@ static void nvme_suspend_queue(struct nvme_dev *dev, unsigned int qid)
 
 	/* ensure that nvme_queue_rq() sees NVMEQ_ENABLED cleared */
 	mb();
+
+#ifdef CONFIG_NVME_QOS
+
+	// Fail queded but not submitted requests before suspending to avoid stalling on a frozen queue
+	nvme_qos_fail_queued_requests(nvmeq);
+#endif
 
 	nvmeq->dev->online_queues--;
 	if (!nvmeq->qid && nvmeq->dev->ctrl.admin_q)
@@ -3588,8 +3650,16 @@ static void nvme_reset_work(struct work_struct *work)
 	 * If we're called to reset a live controller first shut it down before
 	 * moving on.
 	 */
-	if (dev->ctrl.ctrl_config & NVME_CC_ENABLE)
+	if (dev->ctrl.ctrl_config & NVME_CC_ENABLE) {
+
+#ifdef CONFIG_NVME_QOS
+
+		// Fail any queued requests before disable to avoid blocking shutdown on
+		// pending requests that won't be completed due to reset
+		nvme_qos_fail_all_queued_requests(dev);
+#endif
 		nvme_dev_disable(dev, false);
+	}
 	nvme_sync_queues(&dev->ctrl);
 
 	mutex_lock(&dev->shutdown_lock);
@@ -4023,9 +4093,9 @@ static void nvme_reset_prepare(struct pci_dev *pdev)
 
 	/*
 	 * We don't need to check the return value from waiting for the reset
-	 * state as pci_dev device lock is held, making it impossible to race
-	 * with ->remove().
-	 */
+	/* Fail any queued-but-not-submitted requests before disable */
+	nvme_qos_fail_all_queued_requests(dev);
+#endif
 	nvme_disable_prepare_reset(dev, false);
 	nvme_sync_queues(&dev->ctrl);
 }
