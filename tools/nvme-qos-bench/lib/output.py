@@ -8,8 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from .analysis import Statistics, compare_results, calculate_stats, percentage_change
-from .metrics import FioMetrics, JobMetrics
+from .analysis import calculate_stats, percentage_change
 from .progress import format_us, si_format
 
 
@@ -550,8 +549,7 @@ def generate_analysis_report(
         lines.append("")
 
     # Throughput proportionality
-    has_tp = any(r.get("normal_metrics") for r in qos_results)
-    if has_tp:
+    if has_normal:
         lines.append("## Throughput Proportionality")
         lines.append("")
         lines.append("| Config | Hi IOPS | Norm IOPS | Actual | Target | Dev |")

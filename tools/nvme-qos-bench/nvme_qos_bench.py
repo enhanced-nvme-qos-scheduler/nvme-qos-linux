@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib import __version__
 from lib.config import (
     BenchmarkConfig, UserPreferences, load_config,
-    QUICK_CONFIG, DEFAULT_CONFIG, FULL_CONFIG, STRESS_CONFIG,
+    QUICK_CONFIG, DEFAULT_CONFIG, STRESS_CONFIG,
 )
 from lib.conditions import get_condition, list_conditions
 from lib.device import (
@@ -41,7 +41,7 @@ from lib.output import (
 )
 from lib.results_scanner import (
     scan_results_dir, filter_by_commit, get_config_tuples,
-    pool_iterations_across_runs, load_iterations_for_config,
+    pool_iterations_across_runs,
 )
 from lib.progress import (
     Progress, colored, print_header, print_warning,
@@ -236,6 +236,7 @@ def _store_baseline_results(
     workload_type: Optional[str],
     buf_tag: str,
     elapsed: float,
+    effective_depth: Optional[int] = None,
 ) -> Optional[str]:
     """Aggregate baseline iterations and store in results dict. Returns summary line for progress.finish()."""
     if not baseline_results:
@@ -252,6 +253,8 @@ def _store_baseline_results(
     }
     if workload_type:
         bl_config["workload"] = workload_type
+    if effective_depth is not None and effective_depth != depth:
+        bl_config["effective_iodepth"] = effective_depth
 
     result = {
         "config": bl_config,
@@ -266,7 +269,10 @@ def _store_baseline_results(
     results["all"].append(result)
 
     degraded_list = degraded if degraded else None
-    bl_label = f"baseline {buf_tag}qd={depth:<3}"
+    if effective_depth is not None and effective_depth != depth:
+        bl_label = f"baseline {buf_tag}md={effective_depth} qd={depth:<3}"
+    else:
+        bl_label = f"baseline {buf_tag}qd={depth:<3}"
     return _format_summary_line(bl_label, avg_bl, elapsed, degraded=degraded_list)
 
 
@@ -425,6 +431,11 @@ def _run_interleaved_depth(
     )
     progress = Progress(progress_label, config.iterations)
 
+    # Cap baseline fio depth to match the effective in-flight limit the QoS path
+    # will enforce via max_depth, so the comparison isolates scheduling from
+    # queue-depth effects.
+    effective_depth = min(depth, config.qos_max_depth) if config.qos_max_depth else depth
+
     for iteration in range(config.iterations):
         progress.set(iteration)
 
@@ -434,9 +445,9 @@ def _run_interleaved_depth(
                 device.set_qos_enabled(False)
 
             success, fio_data = run_fn(
-                high_iodepth=depth,
+                high_iodepth=effective_depth,
                 high_numjobs=config.high_numjobs,
-                normal_iodepth=depth,
+                normal_iodepth=effective_depth,
                 normal_numjobs=config.normal_numjobs,
                 runtime=config.runtime,
                 ramp_time=config.ramp_time,
@@ -488,7 +499,8 @@ def _run_interleaved_depth(
     # --- Post-loop: aggregate and store results ---
     bl_line = _store_baseline_results(
         baseline_results, baseline_normal, results,
-        depth, weight, workload_type, buf_tag, elapsed
+        depth, weight, workload_type, buf_tag, elapsed,
+        effective_depth=effective_depth,
     )
     if bl_line:
         progress.finish(bl_line)
