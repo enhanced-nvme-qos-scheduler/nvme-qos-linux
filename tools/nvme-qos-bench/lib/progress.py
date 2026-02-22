@@ -59,7 +59,6 @@ def si_format(num: float, suffix: str = "", precision: int = None) -> str:
     return f"{num:.{precision or 1}f}P{suffix}"
 
 def format_us(us: float) -> str:
-    """Format microseconds with appropriate unit."""
     if us < 1000:
         return f"{us:.0f}us"
     elif us < 1000000:
@@ -67,27 +66,7 @@ def format_us(us: float) -> str:
     else:
         return f"{us/1000000:.2f}s"
 
-def format_pct_change(old: float, new: float) -> str:
-    """Format percentage change with color coding."""
-    if old == 0:
-        return "N/A"
-    pct = ((new - old) / old) * 100
-    sign = "+" if pct >= 0 else ""
-    # For latency: negative is good (green), positive is bad (red)
-    if pct <= -30:
-        color = 'green'
-    elif pct <= -10:
-        color = 'yellow'
-    elif pct < 0:
-        color = 'white'
-    elif pct < 5:
-        color = 'yellow'
-    else:
-        color = 'red'
-    return colored(f"{sign}{pct:.1f}%", color)
-
 class Progress:
-    """Single-line progress indicator with \r updates."""
 
     def __init__(self, desc: str = "", total: Optional[int] = None):
         self.desc = desc
@@ -96,17 +75,14 @@ class Progress:
         self.start_time = time.time()
 
     def update(self, n: int = 1, msg: str = "") -> None:
-        """Update progress and redraw line."""
         self.current += n
         self._draw(msg)
 
     def set(self, n: int, msg: str = "") -> None:
-        """Set progress to specific value."""
         self.current = n
         self._draw(msg)
 
     def _draw(self, msg: str = "") -> None:
-        """Draw progress bar on single line."""
         if not sys.stderr.isatty():
             return
 
@@ -137,11 +113,9 @@ class Progress:
         return elapsed
 
     def elapsed(self) -> float:
-        """Return elapsed time since start."""
         return time.time() - self.start_time
 
 def tqdm(iterable: Iterable[T], desc: str = "", total: Optional[int] = None) -> Iterator[T]:
-    """Iterate with tinygrad-style progress bar."""
     if total is None:
         try:
             total = len(iterable)  # type: ignore
@@ -157,7 +131,6 @@ def tqdm(iterable: Iterable[T], desc: str = "", total: Optional[int] = None) -> 
 
 @contextmanager
 def timing(desc: str = ""):
-    """Context manager for timing blocks."""
     start = time.time()
     yield
     elapsed = time.time() - start
@@ -165,7 +138,6 @@ def timing(desc: str = ""):
         print(f"{desc}: {elapsed:.2f}s", file=sys.stderr)
 
 def print_header(device: str, kernel: str, qos_available: bool, ks_available: Optional[bool] = None) -> None:
-    """Print benchmark header line."""
     from . import __version__
     qos_status = colored("available", "green") if qos_available else colored("unavailable", "yellow")
     line = f"nvme-qos-bench v{__version__} | {device} | kernel {kernel} | QoS: {qos_status}"
@@ -175,16 +147,13 @@ def print_header(device: str, kernel: str, qos_available: bool, ks_available: Op
     print(line, file=sys.stderr)
 
 def print_warning(msg: str) -> None:
-    """Print warning message."""
     print(colored(f"WARNING: {msg}", "yellow"), file=sys.stderr)
 
 def print_separator() -> None:
-    """Print separator line."""
     print("---", file=sys.stderr)
 
 def print_summary(p99_range: tuple, iops_range: tuple, cpu_range: tuple,
                    norm_p99_range: Optional[tuple] = None) -> None:
-    """Print summary line with ranges."""
     p99_str = f"p99 {p99_range[0]:+.1f}% to {p99_range[1]:+.1f}%"
     iops_str = f"iops {iops_range[0]:+.1f}% to {iops_range[1]:+.1f}%"
     cpu_str = f"cpu {cpu_range[0]:+.1f}% to {cpu_range[1]:+.1f}%"
@@ -194,5 +163,4 @@ def print_summary(p99_range: tuple, iops_range: tuple, cpu_range: tuple,
     print(f"summary: {' | '.join(parts)}", file=sys.stderr)
 
 def print_status(msg: str) -> None:
-    """Print status/progress message to stderr."""
     print(msg, file=sys.stderr)

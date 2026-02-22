@@ -16,7 +16,6 @@ PREFS_FILE = PREFS_DIR / "config.yaml"
 
 @dataclass
 class BenchmarkConfig:
-    """Benchmark run configuration."""
     # Test parameters
     runtime: int = 60              # seconds per test
     ramp_time: int = 5             # warmup seconds
@@ -75,7 +74,6 @@ class BenchmarkConfig:
 
 @dataclass
 class UserPreferences:
-    """Persistent user preferences."""
     device: Optional[str] = None           # Saved device selection
     confirmed_at: Optional[str] = None     # When destructive access was confirmed
 
@@ -133,7 +131,6 @@ def load_config(name_or_path: str) -> BenchmarkConfig:
     if key in _PRESETS:
         return _PRESETS[key]()
 
-    # Fall back to YAML file
     path = Path(name_or_path)
     if path.exists():
         return BenchmarkConfig.from_yaml(path)

@@ -63,7 +63,6 @@ def scan_results_dir(results_dir: Path) -> List[RunSummary]:
         if ts is None:
             continue
 
-        # Defaults for missing metadata
         commit = None
         branch = None
         dirty = False
@@ -73,7 +72,6 @@ def scan_results_dir(results_dir: Path) -> List[RunSummary]:
         iterations = 0
         condition_id = None
 
-        # Load metadata.json
         meta_file = entry / "metadata.json"
         if meta_file.exists():
             try:
@@ -93,7 +91,6 @@ def scan_results_dir(results_dir: Path) -> List[RunSummary]:
             except (json.JSONDecodeError, KeyError):
                 pass
 
-        # Peek at aggregate.json for baseline/qos status
         has_baseline = False
         has_qos = False
         agg_file = entry / "aggregate.json"

@@ -55,29 +55,25 @@ def cmd_check(args) -> int:
     print("Checking system readiness...")
     print()
 
-    # Check root
     if os.geteuid() != 0:
-        print(colored("✗ Not running as root (required for sysfs access)", "red"))
+        print(colored("Not running as root (required for sysfs access)", "red"))
         print("  Run with: sudo ./nvme_qos_bench.py check")
         return 1
-    print(colored("✓ Running as root", "green"))
+    print(colored("Running as root", "green"))
 
-    # Check fio
     if not check_fio_available():
-        print(colored("✗ fio not found", "red"))
+        print(colored("fio not found", "red"))
         print("  Install with: apt install fio")
         return 1
-    print(colored("✓ fio available", "green"))
+    print(colored("fio available", "green"))
 
-    # Check NVMe devices
     devices = discover_nvme_devices()
     if not devices:
-        print(colored("✗ No NVMe devices found", "red"))
+        print(colored("No NVMe devices found", "red"))
         return 1
-    print(colored(f"✓ Found {len(devices)} NVMe device(s)/partition(s)", "green"))
+    print(colored(f"Found {len(devices)} NVMe device(s)/partition(s)", "green"))
     print()
 
-    # List devices
     print("Available NVMe devices:")
     for i, dev in enumerate(devices, 1):
         mount_info = f"(mounted: {dev.mount_point})" if dev.mount_point else "(not mounted)"
@@ -89,14 +85,13 @@ def cmd_check(args) -> int:
 
     print()
 
-    # Check QoS availability
     controllers = set(d.controller for d in devices)
     qos_available = any(check_qos_available(c) for c in controllers)
 
     if qos_available:
-        print(colored("✓ NVMe QoS available (CONFIG_NVME_QOS=y)", "green"))
+        print(colored("NVMe QoS available (CONFIG_NVME_QOS=y)", "green"))
     else:
-        print(colored("⚠ NVMe QoS not available (CONFIG_NVME_QOS not enabled)", "yellow"))
+        print(colored("NVMe QoS not available (CONFIG_NVME_QOS not enabled)", "yellow"))
         print("  Rebuild kernel with CONFIG_NVME_QOS=y to enable QoS testing")
         print("  Baseline benchmarks will still run")
 
@@ -105,7 +100,6 @@ def cmd_check(args) -> int:
 
 def select_device(args, prefs: UserPreferences) -> Optional[str]:
     """Select device through CLI arg, saved preference, or interactive prompt."""
-    # CLI override
     if args.device:
         valid, msg = validate_device(args.device)
         if not valid:
@@ -113,12 +107,10 @@ def select_device(args, prefs: UserPreferences) -> Optional[str]:
             return None
         return args.device.replace("/dev/", "")
 
-    # Reset saved preference if requested
     if args.reset_device:
         prefs.clear_device()
         print("Cleared saved device preference.", file=sys.stderr)
 
-    # Use saved preference if available
     if prefs.device:
         valid, msg = validate_device(prefs.device)
         if valid:
@@ -128,7 +120,6 @@ def select_device(args, prefs: UserPreferences) -> Optional[str]:
             print(f"Saved device no longer valid: {msg}", file=sys.stderr)
             prefs.clear_device()
 
-    # Interactive selection
     devices = discover_nvme_devices()
     if not devices:
         print(colored("Error: No NVMe devices found", "red"), file=sys.stderr)
@@ -168,7 +159,6 @@ def select_device(args, prefs: UserPreferences) -> Optional[str]:
         print()
         return None
 
-    # Save preference
     prefs.set_device(selected.name)
     print()
     print(f"Device preference saved. Future runs will use /dev/{selected.name}")
@@ -395,6 +385,55 @@ def _store_qos_results(
         print(norm_line, file=sys.stderr)
 
 
+def _run_baseline_iter(
+    run_fn, device: NVMeDevice, config: BenchmarkConfig,
+    effective_depth: int, depth: int, cpus_allowed: Optional[str],
+    label_prefix: str, iteration: int,
+) -> tuple[Optional[Dict], Optional[Dict]]:
+    if device.qos_available:
+        device.set_qos_enabled(False)
+    success, fio_data = run_fn(
+        high_iodepth=effective_depth,
+        high_numjobs=config.high_numjobs,
+        normal_iodepth=effective_depth,
+        normal_numjobs=config.normal_numjobs,
+        runtime=config.runtime,
+        ramp_time=config.ramp_time,
+        iteration=iteration,
+        label=f"{label_prefix}baseline_i{iteration}",
+        cpus_allowed=cpus_allowed,
+        workload_params=config.workload_params,
+    )
+    if not (success and fio_data):
+        return None, None
+    metrics = extract_fio_metrics(fio_data)
+    return get_primary_metrics(metrics), get_normal_metrics(metrics)
+
+
+def _run_qos_iter(
+    run_fn, device: NVMeDevice, config: BenchmarkConfig,
+    depth: int, cpus_allowed: Optional[str],
+    label_prefix: str, weight: int, iteration: int,
+) -> tuple[Optional[Dict], Optional[Dict]]:
+    device.set_qos_enabled(True)
+    success, fio_data = run_fn(
+        high_iodepth=depth,
+        high_numjobs=config.high_numjobs,
+        normal_iodepth=depth,
+        normal_numjobs=config.normal_numjobs,
+        runtime=config.runtime,
+        ramp_time=config.ramp_time,
+        iteration=iteration,
+        label=f"{label_prefix}qos_w{weight}_i{iteration}",
+        cpus_allowed=cpus_allowed,
+        workload_params=config.workload_params,
+    )
+    if not (success and fio_data):
+        return None, None
+    metrics = extract_fio_metrics(fio_data)
+    return get_primary_metrics(metrics), get_normal_metrics(metrics)
+
+
 def _run_interleaved_depth(
     runner: FioRunner, device: NVMeDevice, config: BenchmarkConfig,
     depth: int, weight: int, cpus_allowed: Optional[str],
@@ -439,64 +478,31 @@ def _run_interleaved_depth(
     for iteration in range(config.iterations):
         progress.set(iteration)
 
-        # --- Baseline iteration ---
         if run_baseline:
-            if device.qos_available:
-                device.set_qos_enabled(False)
-
-            success, fio_data = run_fn(
-                high_iodepth=effective_depth,
-                high_numjobs=config.high_numjobs,
-                normal_iodepth=effective_depth,
-                normal_numjobs=config.normal_numjobs,
-                runtime=config.runtime,
-                ramp_time=config.ramp_time,
-                iteration=iteration,
-                label=f"{label_prefix}baseline_i{iteration}",
-                cpus_allowed=cpus_allowed,
-                workload_params=config.workload_params,
+            primary, norm = _run_baseline_iter(
+                run_fn, device, config, effective_depth, depth,
+                cpus_allowed, label_prefix, iteration,
             )
-
-            if success and fio_data:
-                metrics = extract_fio_metrics(fio_data)
-                primary = get_primary_metrics(metrics)
+            if primary is not None:
                 baseline_results.append(primary)
-                norm = get_normal_metrics(metrics)
                 if norm:
                     baseline_normal.append(norm)
 
-        # --- QoS iteration (back-to-back, no gap) ---
         if run_qos:
-            device.set_qos_enabled(True)
-
-            success, fio_data = run_fn(
-                high_iodepth=depth,
-                high_numjobs=config.high_numjobs,
-                normal_iodepth=depth,
-                normal_numjobs=config.normal_numjobs,
-                runtime=config.runtime,
-                ramp_time=config.ramp_time,
-                iteration=iteration,
-                label=f"{label_prefix}qos_w{weight}_i{iteration}",
-                cpus_allowed=cpus_allowed,
-                workload_params=config.workload_params,
+            primary, norm = _run_qos_iter(
+                run_fn, device, config, depth,
+                cpus_allowed, label_prefix, weight, iteration,
             )
-
-            if success and fio_data:
-                metrics = extract_fio_metrics(fio_data)
-                primary = get_primary_metrics(metrics)
+            if primary is not None:
                 qos_results.append(primary)
-                norm = get_normal_metrics(metrics)
                 if norm:
                     qos_normal.append(norm)
 
-        # --- Cooldown AFTER the pair, before next pair ---
         if config.iter_cooldown and iteration < config.iterations - 1:
             time.sleep(config.iter_cooldown)
 
     elapsed = progress.elapsed()
 
-    # --- Post-loop: aggregate and store results ---
     bl_line = _store_baseline_results(
         baseline_results, baseline_normal, results,
         depth, weight, workload_type, buf_tag, elapsed,
@@ -510,6 +516,131 @@ def _run_interleaved_depth(
         depth, weight, workload_type, config,
         kernel_stats, ks_available, buf_tag, elapsed
     )
+
+
+def _run_cpu_overhead_suite(runner: FioRunner, device: NVMeDevice, config: BenchmarkConfig, results: Dict) -> None:
+    print_separator()
+    results["cpu_overhead"] = []
+
+    for depth in [1, 4]:
+        for qos_on in [False, True]:
+            device.set_qos_enabled(qos_on)
+            label = f"qos={'on' if qos_on else 'off'}"
+            depth_results = []
+            progress = Progress(f"cpu {label} qd={depth}", config.iterations)
+
+            for iteration in range(config.iterations):
+                progress.set(iteration)
+                success, fio_data = runner.run_high_priority(
+                    iodepth=depth,
+                    numjobs=1,
+                    runtime=config.runtime,
+                    ramp_time=config.ramp_time,
+                    iteration=iteration,
+                )
+                if success and fio_data:
+                    metrics = extract_fio_metrics(fio_data)
+                    depth_results.append(get_primary_metrics(metrics))
+
+            if not depth_results:
+                continue
+            avg = _aggregate_iterations(depth_results)
+            elapsed = progress.elapsed()
+            results["cpu_overhead"].append({
+                "config": {"qos_enabled": qos_on, "iodepth": depth, "phase": "cpu_overhead"},
+                "metrics": avg,
+                "iterations": depth_results,
+            })
+            progress.finish(
+                f"cpu {label} qd={depth:<2}: "
+                f"p99={format_us(avg['p99_us']):>8} "
+                f"iops={si_format(avg['iops']):>8} "
+                f"cpu={avg['cpu_pct']:5.1f}% "
+                f"[{elapsed:.1f}s]"
+            )
+
+    for depth in [1, 4]:
+        off_match = next(
+            (r for r in results["cpu_overhead"]
+             if r["config"]["iodepth"] == depth and not r["config"]["qos_enabled"]),
+            None
+        )
+        on_match = next(
+            (r for r in results["cpu_overhead"]
+             if r["config"]["iodepth"] == depth and r["config"]["qos_enabled"]),
+            None
+        )
+        if off_match and on_match:
+            p99_pct = percentage_change(
+                off_match["metrics"]["p99_us"],
+                on_match["metrics"]["p99_us"]
+            )
+            iops_pct = percentage_change(
+                off_match["metrics"]["iops"],
+                on_match["metrics"]["iops"]
+            )
+            print(
+                f"  qd={depth} delta: p99={p99_pct:+.1f}% iops={iops_pct:+.1f}%",
+                file=sys.stderr,
+            )
+
+
+def _run_isolation_suite(
+    runner: FioRunner, device: NVMeDevice, config: BenchmarkConfig,
+    results: Dict,
+) -> None:
+    print_separator()
+    results["isolation"] = []
+    device.set_qos_enabled(True)
+    device.set_qos_weight(config.weights[0] if config.weights else 9)
+
+    for prio_label, run_fn, default_numjobs in [
+        ("high", runner.run_high_priority, config.high_numjobs),
+        ("normal", runner.run_normal_priority, config.normal_numjobs),
+    ]:
+        for depth in config.depths:
+            if depth < 16 and len(config.depths) > 3:
+                continue
+
+            depth_results = []
+            progress = Progress(f"iso {prio_label} qd={depth}", config.iterations)
+
+            for iteration in range(config.iterations):
+                progress.set(iteration)
+                success, fio_data = run_fn(
+                    iodepth=depth,
+                    numjobs=default_numjobs,
+                    runtime=config.runtime,
+                    ramp_time=config.ramp_time,
+                    iteration=iteration,
+                )
+                if success and fio_data:
+                    metrics = extract_fio_metrics(fio_data)
+                    depth_results.append(get_primary_metrics(metrics))
+
+            if not depth_results:
+                continue
+            avg = _aggregate_iterations(depth_results)
+            elapsed = progress.elapsed()
+            results["isolation"].append({
+                "config": {
+                    "qos_enabled": True,
+                    "iodepth": depth,
+                    "phase": "isolation",
+                    "priority": prio_label,
+                },
+                "metrics": avg,
+                "iterations": depth_results,
+            })
+            util_pct = avg.get('io_util_pct', 0)
+            progress.finish(
+                f"iso {prio_label:<6} qd={depth:<3}: "
+                f"p99={format_us(avg['p99_us']):>8} "
+                f"iops={si_format(avg['iops']):>8} "
+                f"cpu={avg['cpu_pct']:5.1f}% "
+                f"util={util_pct:5.1f}% "
+                f"[{elapsed:.1f}s]"
+            )
 
 
 def run_benchmark_suite(
@@ -630,140 +761,11 @@ def run_benchmark_suite(
                     f"results may be affected",
                     "yellow"), file=sys.stderr)
 
-        # CPU overhead tests (opt-in)
         if config.run_cpu_overhead and device.qos_available:
-            print_separator()
-            results["cpu_overhead"] = []
+            _run_cpu_overhead_suite(runner, device, config, results)
 
-            for depth in [1, 4]:
-                for qos_on in [False, True]:
-                    device.set_qos_enabled(qos_on)
-                    label = f"qos={'on' if qos_on else 'off'}"
-
-                    depth_results = []
-                    progress = Progress(f"cpu {label} qd={depth}", config.iterations)
-
-                    for iteration in range(config.iterations):
-                        progress.set(iteration)
-
-                        success, fio_data = runner.run_high_priority(
-                            iodepth=depth,
-                            numjobs=1,
-                            runtime=config.runtime,
-                            ramp_time=config.ramp_time,
-                            iteration=iteration,
-                        )
-
-                        if success and fio_data:
-                            metrics = extract_fio_metrics(fio_data)
-                            primary = get_primary_metrics(metrics)
-                            depth_results.append(primary)
-
-                    if depth_results:
-                        avg = _aggregate_iterations(depth_results)
-                        elapsed = progress.elapsed()
-                        result = {
-                            "config": {
-                                "qos_enabled": qos_on,
-                                "iodepth": depth,
-                                "phase": "cpu_overhead",
-                            },
-                            "metrics": avg,
-                            "iterations": depth_results,
-                        }
-                        results["cpu_overhead"].append(result)
-                        progress.finish(
-                            f"cpu {label} qd={depth:<2}: "
-                            f"p99={format_us(avg['p99_us']):>8} "
-                            f"iops={si_format(avg['iops']):>8} "
-                            f"cpu={avg['cpu_pct']:5.1f}% "
-                            f"[{elapsed:.1f}s]"
-                        )
-
-            # Print deltas
-            for depth in [1, 4]:
-                off_match = next(
-                    (r for r in results["cpu_overhead"]
-                     if r["config"]["iodepth"] == depth and not r["config"]["qos_enabled"]),
-                    None
-                )
-                on_match = next(
-                    (r for r in results["cpu_overhead"]
-                     if r["config"]["iodepth"] == depth and r["config"]["qos_enabled"]),
-                    None
-                )
-                if off_match and on_match:
-                    p99_pct = percentage_change(
-                        off_match["metrics"]["p99_us"],
-                        on_match["metrics"]["p99_us"]
-                    )
-                    iops_pct = percentage_change(
-                        off_match["metrics"]["iops"],
-                        on_match["metrics"]["iops"]
-                    )
-                    print(
-                        f"  qd={depth} delta: p99={p99_pct:+.1f}% iops={iops_pct:+.1f}%",
-                        file=sys.stderr,
-                    )
-
-        # Isolation tests (opt-in): single-priority with QoS on
         if config.run_isolation and device.qos_available:
-            print_separator()
-            results["isolation"] = []
-            device.set_qos_enabled(True)
-            device.set_qos_weight(config.weights[0] if config.weights else 9)
-
-            for prio_label, run_fn, default_numjobs in [
-                ("high", runner.run_high_priority, config.high_numjobs),
-                ("normal", runner.run_normal_priority, config.normal_numjobs),
-            ]:
-                for depth in config.depths:
-                    if depth < 16 and len(config.depths) > 3:
-                        continue
-
-                    depth_results = []
-                    progress = Progress(f"iso {prio_label} qd={depth}", config.iterations)
-
-                    for iteration in range(config.iterations):
-                        progress.set(iteration)
-
-                        success, fio_data = run_fn(
-                            iodepth=depth,
-                            numjobs=default_numjobs,
-                            runtime=config.runtime,
-                            ramp_time=config.ramp_time,
-                            iteration=iteration,
-                        )
-
-                        if success and fio_data:
-                            metrics = extract_fio_metrics(fio_data)
-                            primary = get_primary_metrics(metrics)
-                            depth_results.append(primary)
-
-                    if depth_results:
-                        avg = _aggregate_iterations(depth_results)
-                        elapsed = progress.elapsed()
-                        result = {
-                            "config": {
-                                "qos_enabled": True,
-                                "iodepth": depth,
-                                "phase": "isolation",
-                                "priority": prio_label,
-                            },
-                            "metrics": avg,
-                            "iterations": depth_results,
-                        }
-                        results["isolation"].append(result)
-
-                        util_pct = avg.get('io_util_pct', 0)
-                        progress.finish(
-                            f"iso {prio_label:<6} qd={depth:<3}: "
-                            f"p99={format_us(avg['p99_us']):>8} "
-                            f"iops={si_format(avg['iops']):>8} "
-                            f"cpu={avg['cpu_pct']:5.1f}% "
-                            f"util={util_pct:5.1f}% "
-                            f"[{elapsed:.1f}s]"
-                        )
+            _run_isolation_suite(runner, device, config, results)
 
     finally:
         # Restore device state
@@ -817,7 +819,6 @@ def cmd_run_baseline(device: NVMeDevice, args) -> int:
         print("  Baseline overhead check requires QoS sysfs controls", file=sys.stderr)
         return 1
 
-    # Setup output directory
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_dir = Path(args.output) / f"baseline_{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -914,7 +915,6 @@ def cmd_run_baseline(device: NVMeDevice, args) -> int:
     finally:
         device.restore_state()
 
-    # Comparison and verdict
     print_separator()
     print(f"{'':>15}{'p50':>7}  {'p99':>7}  {'IOPS':>7}  {'CPU':>7}", file=sys.stderr)
 
@@ -1233,19 +1233,16 @@ def _validate_classification(
 
 def cmd_validate(args) -> int:
     """Quick functional validation of QoS scheduler correctness."""
-    # Check root
     if os.geteuid() != 0:
         print(colored("Error: Must run as root for sysfs access and direct I/O", "red"),
               file=sys.stderr)
         return 1
 
-    # Check fio
     if not check_fio_available():
         print(colored("Error: fio not found. Install with: apt install fio", "red"),
               file=sys.stderr)
         return 1
 
-    # Select device
     prefs = UserPreferences.load()
     device_name = select_device(args, prefs)
     if not device_name:
@@ -1259,7 +1256,6 @@ def cmd_validate(args) -> int:
         print("  Validation requires QoS sysfs controls", file=sys.stderr)
         return 1
 
-    # Setup kernel stats
     kernel_stats = QoSKernelStats(device.controller)
     if not kernel_stats.available:
         print(colored("Error: Kernel QoS counters not available (debugfs not mounted?)", "red"),
@@ -1267,7 +1263,6 @@ def cmd_validate(args) -> int:
         print("  Validation requires debugfs QoS counters", file=sys.stderr)
         return 1
 
-    # Setup output directory
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_dir = Path(args.output) / f"validate_{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1284,21 +1279,18 @@ def cmd_validate(args) -> int:
     all_results = {}
 
     try:
-        # Test 1: Policy override
         print(f"[1/{total_tests}] Policy override...")
         passed, result = _validate_policy_override(device, runner, kernel_stats)
         all_results["policy_override"] = result
         if passed:
             tests_passed += 1
 
-        # Test 2: Enable/disable
         print(f"[2/{total_tests}] Enable/disable...")
         passed, result = _validate_enable_disable(device, runner, kernel_stats)
         all_results["enable_disable"] = result
         if passed:
             tests_passed += 1
 
-        # Test 3: Classification
         print(f"[3/{total_tests}] Classification (default policy)...")
         passed, result = _validate_classification(device, runner, kernel_stats)
         all_results["classification"] = result
@@ -1308,7 +1300,6 @@ def cmd_validate(args) -> int:
     finally:
         device.restore_state()
 
-    # Summary
     print("---")
     all_pass = tests_passed == total_tests
     if all_pass:
@@ -1317,7 +1308,6 @@ def cmd_validate(args) -> int:
         verdict = colored("FAIL", "red")
     print(f"Verdict: {verdict} ({tests_passed}/{total_tests})")
 
-    # Save results
     validate_data = {
         "type": "validate",
         "pass": all_pass,
@@ -1370,7 +1360,6 @@ def _print_condition_diagnostics(condition_profile, config, hw_queues):
 
 def _save_reports(args, results, system_info, output_dir):
     """Generate and save all report files."""
-    # Markdown summary
     comparisons = None
     if results["qos"] and results["baseline"]:
         p99_changes = [r["pct_change"] for r in results["qos"] if r.get("pct_change") is not None]
@@ -1384,7 +1373,6 @@ def _save_reports(args, results, system_info, output_dir):
     with open(output_dir / "summary.md", "w") as f:
         f.write(md_report)
 
-    # Comparison report
     if args.compare and results["baseline"] and results["qos"]:
         comparison_md = generate_comparison_report(
             results["baseline"], results["qos"], system_info
@@ -1392,7 +1380,6 @@ def _save_reports(args, results, system_info, output_dir):
         with open(output_dir / "comparison.md", "w") as f:
             f.write(comparison_md)
 
-    # Capture dmesg
     dmesg = capture_dmesg()
     if dmesg:
         with open(output_dir / "dmesg.txt", "w") as f:
@@ -1483,7 +1470,6 @@ def _print_benchmark_summary(results):
     if not p99_changes:
         return
 
-    # Calculate IOPS changes
     iops_changes = []
     cpu_changes = []
     for qos_r in results["qos"]:
@@ -1595,16 +1581,12 @@ def _load_benchmark_config(args, device):
 
 def cmd_run(args) -> int:
     """Run benchmark suite."""
-    # Check prerequisites
     error = _check_prerequisites()
     if error:
         print(colored(f"Error: {error}", "red"), file=sys.stderr)
         return 1
 
-    # Load preferences
     prefs = UserPreferences.load()
-
-    # Select device
     device_name = select_device(args, prefs)
     if not device_name:
         return 1
@@ -1615,24 +1597,19 @@ def cmd_run(args) -> int:
     if args.baseline:
         return cmd_run_baseline(device, args)
 
-    # Load config
     result = _load_benchmark_config(args, device)
     if isinstance(result, int):
         return result  # Error code
     config, condition_profile = result
 
-    # Override config with CLI args
     _apply_cli_overrides(args, config, condition_profile)
 
-    # Setup output directory
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_dir = Path(args.output) / f"run_{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Setup kernel stats reader
     kernel_stats = QoSKernelStats(device.controller)
 
-    # Print header
     kernel = get_kernel_version()
     print_header(device_name, kernel, device.qos_available, kernel_stats.available)
 
@@ -1641,36 +1618,23 @@ def cmd_run(args) -> int:
         print("  Running baseline benchmarks only - no QoS comparison possible", file=sys.stderr)
         print("  Rebuild kernel with CONFIG_NVME_QOS=y to enable QoS testing", file=sys.stderr)
 
-    # Collect system info
     system_info = collect_system_info(device_name, device.controller)
-
-    # Track total runtime
     start_time = time.time()
 
-    # Run benchmarks
     results = run_benchmark_suite(
         device, config, output_dir,
         compare=args.compare,
         kernel_stats=kernel_stats,
     )
 
-    # Print summary
     print_separator()
     _print_benchmark_summary(results)
 
-    # Save outputs
     _save_metadata(device, config, condition_profile, system_info, results, output_dir)
-
-    # Aggregate results
     save_json(results, output_dir / "aggregate.json")
-
-    # CSV
     _save_csv_results(results, output_dir)
-
-    # Generate reports
     _save_reports(args, results, system_info, output_dir)
 
-    # Calculate total runtime
     total_elapsed = time.time() - start_time
     minutes, seconds = divmod(total_elapsed, 60)
 
@@ -2140,8 +2104,6 @@ def _print_kernel_section(results: Dict) -> None:
             print(colored("  -> WARNING: Normal priority received zero dispatches (starvation)", "red"))
         print()
 
-    # No extra newline needed — each entry already ends with print()
-
 
 def _print_throughput_section(results: Dict) -> None:
     """Print throughput proportionality analysis (IOPS split vs configured weight)."""
@@ -2305,7 +2267,6 @@ def cmd_analyze(args) -> int:
         print(colored(f"Error: Directory not found: {input_dir}", "red"), file=sys.stderr)
         return 1
 
-    # Load aggregate results
     aggregate_file = input_dir / "aggregate.json"
     if not aggregate_file.exists():
         print(colored(f"Error: No aggregate.json found in {input_dir}", "red"), file=sys.stderr)
@@ -2314,7 +2275,6 @@ def cmd_analyze(args) -> int:
     with open(aggregate_file) as f:
         results = json.load(f)
 
-    # Load metadata
     metadata_file = input_dir / "metadata.json"
     system_info = {}
     config_info = {}
@@ -2324,12 +2284,10 @@ def cmd_analyze(args) -> int:
             system_info = metadata.get("system", {})
             config_info = metadata.get("config", {})
 
-    # Check for empty results
     if not results.get("all"):
         print(colored(f"No benchmark results found in {input_dir}", "yellow"))
         return 0
 
-    # Print all sections
     _print_analyze_header(input_dir, system_info, config_info)
     _print_high_priority_table(results)
     _print_normal_priority_table(results)
@@ -2339,7 +2297,6 @@ def cmd_analyze(args) -> int:
     _print_kernel_section(results)
     _print_analyze_summary(results, config_info)
 
-    # Markdown output
     if args.output:
         md = generate_analysis_report(input_dir, results, system_info, config_info)
         out_path = Path(args.output)
@@ -2359,7 +2316,6 @@ def cmd_list(args) -> int:
 
     runs = scan_results_dir(results_dir)
 
-    # Filter by commit if requested
     if args.commit:
         runs = filter_by_commit(runs, args.commit)
         if not runs:
@@ -2370,10 +2326,8 @@ def cmd_list(args) -> int:
         print("No benchmark runs found.")
         return 0
 
-    # Check if any runs have condition IDs
     has_conditions = any(r.condition_id for r in runs)
 
-    # Print table header
     print()
     cond_col = f"{'Cond':>4} " if has_conditions else ""
     header = (
@@ -2384,7 +2338,6 @@ def cmd_list(args) -> int:
     print(colored(header, "cyan"))
     print("-" * len(header.expandtabs()))
 
-    # Track stats
     commits = set()
     missing_meta = 0
 
@@ -2415,7 +2368,6 @@ def cmd_list(args) -> int:
             f"{run.iterations:>4} {bl_str:>3} {qos_str:>3}"
         )
 
-    # Summary
     print()
     summary = f"{len(runs)} runs"
     if commits:
@@ -2610,7 +2562,6 @@ def _compare_commits(args) -> int:
     if min_samples < 5:
         print(colored(f"* Low sample sizes (min n={min_samples}). Rerun with --iterations 5+ for higher confidence.", "yellow"))
 
-    # Markdown output
     if args.output:
         md = generate_commit_comparison_report(
             base_runs, test_runs, comparisons, metric_key,

@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0
 """Load condition profiles for reproducible benchmark configurations.
 
-Each profile defines a load condition (A-K) that exercises a specific
-scheduler mechanism.  Profiles auto-scale to the hardware queue count
-so `--condition D` produces the right job density on any machine.
+Each profile defines a load condition that exercises a specific
+scheduler mechanism.
 """
 
 from dataclasses import dataclass, field
@@ -125,10 +124,6 @@ class ConditionProfile:
         )
 
 
-# ---------------------------------------------------------------------------
-# Condition registry
-# ---------------------------------------------------------------------------
-
 CONDITIONS: Dict[str, ConditionProfile] = {}
 
 
@@ -137,7 +132,6 @@ def _register(profile: ConditionProfile) -> ConditionProfile:
     return profile
 
 
-# A: Zero-overhead baseline
 _register(ConditionProfile(
     id="A",
     name="Zero-overhead baseline",
@@ -150,7 +144,6 @@ _register(ConditionProfile(
     pass_criteria="p99 regression < 2% at all depths",
 ))
 
-# C: Few queues, high density
 _register(ConditionProfile(
     id="C",
     name="Few queues, high density",
@@ -166,7 +159,6 @@ _register(ConditionProfile(
     pass_criteria="WRR engagement; fairness OK; no high-prio regression",
 ))
 
-# D: Device-saturated, high contention (target operating condition)
 _register(ConditionProfile(
     id="D",
     name="Device-sat, high contention",
@@ -181,7 +173,6 @@ _register(ConditionProfile(
     pass_criteria="Significant p99 improvement; WRR actively arbitrating",
 ))
 
-# G: Majority high-prio
 _register(ConditionProfile(
     id="G",
     name="Majority high-prio",
@@ -197,7 +188,6 @@ _register(ConditionProfile(
     pass_criteria="Normal still gets service; credit refills visible",
 ))
 
-# I: Weight sweep
 _register(ConditionProfile(
     id="I",
     name="Weight sweep",

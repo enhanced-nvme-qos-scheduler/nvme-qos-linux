@@ -8,7 +8,6 @@ from typing import Dict, Any, Optional, List
 
 @dataclass
 class JobMetrics:
-    """Metrics for a single fio job."""
     job_name: str
     iops: float
     bw_bytes: float          # Bandwidth in bytes/sec
@@ -28,7 +27,6 @@ class JobMetrics:
 
 @dataclass
 class FioMetrics:
-    """Aggregated metrics from a fio run."""
     jobs: List[JobMetrics]
     # Aggregate metrics (for mixed workloads, separate by priority class)
     high_prio: Optional[JobMetrics] = None
@@ -41,7 +39,6 @@ class FioMetrics:
 
 
 def _ns_to_us(ns: float) -> float:
-    """Convert nanoseconds to microseconds."""
     return ns / 1000.0
 
 
@@ -81,12 +78,9 @@ def _extract_percentile(clat_ns: Dict, percentile: float) -> float:
 
 
 def extract_job_metrics(job: Dict[str, Any]) -> JobMetrics:
-    """Extract metrics from a single fio job result."""
-    # Determine if this is a read or write job
     read_data = job.get("read", {})
     write_data = job.get("write", {})
 
-    # Use whichever has data (non-zero iops)
     if read_data.get("iops", 0) > 0:
         data = read_data
     elif write_data.get("iops", 0) > 0:
@@ -117,7 +111,6 @@ def extract_job_metrics(job: Dict[str, Any]) -> JobMetrics:
 
 
 def extract_fio_metrics(fio_json: Dict[str, Any]) -> FioMetrics:
-    """Extract all metrics from fio JSON output."""
     jobs_data = fio_json.get("jobs", [])
 
     jobs = [extract_job_metrics(j) for j in jobs_data]
@@ -134,24 +127,19 @@ def extract_fio_metrics(fio_json: Dict[str, Any]) -> FioMetrics:
 
     for jm in jobs:
         name_lower = jm.job_name.lower()
-        # Case-insensitive prefix/substring match
         if name_lower.startswith("high") or ("high" in name_lower and "normal" not in name_lower):
             high_prio_jobs.append(jm)
         elif name_lower.startswith("normal") or "bulk" in name_lower:
             normal_prio_jobs.append(jm)
         else:
-            # Unclassified job - log a warning
             print(f"Warning: Job '{jm.job_name}' does not match high/normal priority patterns, skipping classification", file=sys.stderr)
 
-    # Aggregate high-priority jobs if multiple
     if high_prio_jobs:
         high_prio = _aggregate_jobs(high_prio_jobs, "high-prio-aggregate")
 
-    # Aggregate normal-priority jobs if multiple
     if normal_prio_jobs:
         normal_prio = _aggregate_jobs(normal_prio_jobs, "normal-prio-aggregate")
 
-    # Calculate totals
     total_iops = sum(j.iops for j in jobs)
     total_bw = sum(j.bw_bytes for j in jobs)
     avg_cpu = sum(j.usr_cpu + j.sys_cpu for j in jobs) / len(jobs) if jobs else 0
@@ -182,14 +170,12 @@ def extract_fio_metrics(fio_json: Dict[str, Any]) -> FioMetrics:
 
 
 def _aggregate_jobs(jobs: List[JobMetrics], name: str) -> JobMetrics:
-    """Aggregate metrics from multiple jobs of the same type."""
     if not jobs:
         raise ValueError("Cannot aggregate empty job list")
 
     if len(jobs) == 1:
         return jobs[0]
 
-    # Sum IOPS and bandwidth
     total_iops = sum(j.iops for j in jobs)
     total_bw = sum(j.bw_bytes for j in jobs)
 
@@ -199,17 +185,13 @@ def _aggregate_jobs(jobs: List[JobMetrics], name: str) -> JobMetrics:
     worst_p999 = max(j.lat_p999_us for j in jobs)
     worst_p9999 = max(j.lat_p9999_us for j in jobs)
 
-    # Average for other latency metrics
     avg_mean = sum(j.lat_mean_us for j in jobs) / len(jobs)
     avg_p50 = sum(j.lat_p50_us for j in jobs) / len(jobs)
     avg_p90 = sum(j.lat_p90_us for j in jobs) / len(jobs)
 
-    # CPU: sum since multiple jobs
     total_usr = sum(j.usr_cpu for j in jobs)
     total_sys = sum(j.sys_cpu for j in jobs)
     total_ctx = sum(j.ctx for j in jobs)
-
-    # Use max runtime
     max_runtime = max(j.runtime_ms for j in jobs)
 
     return JobMetrics(
@@ -232,8 +214,6 @@ def _aggregate_jobs(jobs: List[JobMetrics], name: str) -> JobMetrics:
 
 
 def get_primary_metrics(metrics: FioMetrics) -> Dict[str, float]:
-    """Get the primary metrics for comparison (high-priority or first job)."""
-    # Prefer high-priority metrics if available (mixed workload)
     if metrics.high_prio:
         job = metrics.high_prio
     elif metrics.jobs:
@@ -254,7 +234,6 @@ def get_primary_metrics(metrics: FioMetrics) -> Dict[str, float]:
         "runtime_s": job.runtime_ms / 1000,
     }
 
-    # Include disk_util if available
     if metrics.disk_util:
         result["io_util_pct"] = metrics.disk_util["util_pct"]
         result["io_read_ios"] = metrics.disk_util["read_ios"]
@@ -266,7 +245,6 @@ def get_primary_metrics(metrics: FioMetrics) -> Dict[str, float]:
 
 
 def get_normal_metrics(metrics: FioMetrics) -> Dict[str, float]:
-    """Get normal-priority job metrics for the other side of the QoS tradeoff."""
     if not metrics.normal_prio:
         return {}
 

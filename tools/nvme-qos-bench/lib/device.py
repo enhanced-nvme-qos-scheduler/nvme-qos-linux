@@ -11,7 +11,6 @@ from typing import Optional, List, Dict, Any
 
 @dataclass
 class NVMeDeviceInfo:
-    """Information about an NVMe device or partition."""
     name: str                      # e.g., "nvme0n1" or "nvme0n1p1"
     controller: str                # e.g., "nvme0"
     path: str                      # e.g., "/dev/nvme0n1"
@@ -23,7 +22,6 @@ class NVMeDeviceInfo:
 
 
 def _read_sysfs(path: str) -> Optional[str]:
-    """Read sysfs file, return None if not found or error."""
     try:
         with open(path) as f:
             return f.read().strip()
@@ -32,7 +30,6 @@ def _read_sysfs(path: str) -> Optional[str]:
 
 
 def _write_sysfs(path: str, value: str) -> bool:
-    """Write to sysfs file, return success."""
     try:
         with open(path, 'w') as f:
             f.write(value)
@@ -42,7 +39,6 @@ def _write_sysfs(path: str, value: str) -> bool:
 
 
 def _get_mount_point(device: str) -> Optional[str]:
-    """Get mount point for a device, or None if not mounted."""
     try:
         with open("/proc/mounts") as f:
             for line in f:
@@ -55,7 +51,6 @@ def _get_mount_point(device: str) -> Optional[str]:
 
 
 def _human_size(size_bytes: int) -> str:
-    """Convert bytes to human-readable size."""
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size_bytes < 1024:
             return f"{size_bytes:.1f}{unit}"
@@ -132,7 +127,6 @@ class NVMeDevice:
         self.name = name
         self.path = f"/dev/{name}"
 
-        # Extract controller and namespace
         match = re.match(r'(nvme\d+)(n\d+)(p\d+)?', name)
         if not match:
             raise ValueError(f"Invalid NVMe device name: {name}")
@@ -141,10 +135,7 @@ class NVMeDevice:
         self.namespace = f"{match.group(1)}{match.group(2)}"
         self.is_partition = match.group(3) is not None
 
-        # Check QoS availability
         self.qos_available = check_qos_available(self.controller)
-
-        # State for save/restore
         self._saved_state: Optional[Dict[str, Any]] = None
 
     @property
@@ -164,27 +155,23 @@ class NVMeDevice:
         return f"/sys/block/{self.namespace}/qos_policy"
 
     def get_qos_enabled(self) -> Optional[bool]:
-        """Get current QoS enable state."""
         if not self.qos_available:
             return None
         val = _read_sysfs(self.qos_enable_path)
         return val == "1" if val else None
 
     def set_qos_enabled(self, enable: bool) -> bool:
-        """Enable or disable QoS."""
         if not self.qos_available:
             return False
         return _write_sysfs(self.qos_enable_path, "1" if enable else "0")
 
     def get_qos_weight(self) -> Optional[int]:
-        """Get current QoS high-priority weight."""
         if not self.qos_available:
             return None
         val = _read_sysfs(self.qos_weight_path)
         return int(val) if val else None
 
     def set_qos_weight(self, weight: int) -> bool:
-        """Set QoS high-priority weight."""
         if not self.qos_available:
             return False
         return _write_sysfs(self.qos_weight_path, str(weight))
@@ -203,7 +190,6 @@ class NVMeDevice:
         return _write_sysfs(self.qos_max_depth_path, str(depth))
 
     def get_qos_policy(self) -> Optional[str]:
-        """Get current namespace QoS policy."""
         if not self.qos_available:
             return None
         return _read_sysfs(self.qos_policy_path)
@@ -215,7 +201,6 @@ class NVMeDevice:
         return _write_sysfs(self.qos_policy_path, policy)
 
     def save_state(self) -> None:
-        """Save current QoS state for later restoration."""
         if not self.qos_available:
             self._saved_state = None
             return
@@ -228,7 +213,6 @@ class NVMeDevice:
         }
 
     def restore_state(self) -> bool:
-        """Restore previously saved QoS state."""
         if self._saved_state is None:
             return True  # Nothing to restore
 
@@ -272,12 +256,10 @@ class NVMeDevice:
         return 1  # safe fallback
 
     def get_model(self) -> str:
-        """Get device model name."""
         model = _read_sysfs(f"/sys/class/nvme/{self.controller}/model")
         return model.strip() if model else "Unknown"
 
     def get_size_bytes(self) -> int:
-        """Get device size in bytes."""
         if self.is_partition:
             # For partition, read from parent namespace directory
             size_str = _read_sysfs(f"/sys/block/{self.namespace}/{self.name}/size")
@@ -286,7 +268,6 @@ class NVMeDevice:
         return int(size_str) * 512 if size_str else 0
 
     def is_mounted(self) -> Optional[str]:
-        """Return mount point if mounted, None otherwise."""
         return _get_mount_point(self.name)
 
     def trim(self) -> bool:
@@ -311,15 +292,12 @@ def validate_device(name: str) -> tuple[bool, str]:
 
     Returns (valid, message) tuple.
     """
-    # Normalize name (strip /dev/ if present)
     if name.startswith("/dev/"):
         name = name[5:]
 
-    # Check device exists
     if not Path(f"/dev/{name}").exists():
         return False, f"Device /dev/{name} does not exist"
 
-    # Check it's an NVMe device
     if not re.match(r'nvme\d+n\d+(p\d+)?$', name):
         return False, f"{name} is not an NVMe device or partition"
 

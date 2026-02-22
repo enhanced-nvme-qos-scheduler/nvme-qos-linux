@@ -14,12 +14,10 @@ _cached_system_info: Optional[Dict[str, Any]] = None
 
 
 def get_kernel_version() -> str:
-    """Get kernel version string."""
     return platform.release()
 
 
 def get_cpu_info() -> Dict[str, Any]:
-    """Get CPU information."""
     info = {
         "model": "Unknown",
         "cores": os.cpu_count() or 0,
@@ -35,7 +33,6 @@ def get_cpu_info() -> Dict[str, Any]:
     except (OSError, IOError):
         pass
 
-    # Count threads from /proc/cpuinfo
     try:
         with open("/proc/cpuinfo") as f:
             info["threads"] = sum(1 for line in f if line.startswith("processor"))
@@ -46,7 +43,6 @@ def get_cpu_info() -> Dict[str, Any]:
 
 
 def get_memory_info() -> Dict[str, Any]:
-    """Get memory information in bytes."""
     info = {"total_bytes": 0}
 
     try:
@@ -64,7 +60,6 @@ def get_memory_info() -> Dict[str, Any]:
 
 
 def get_nvme_info(controller: str) -> Dict[str, Any]:
-    """Get NVMe controller information."""
     info = {
         "controller": controller,
         "model": "Unknown",
@@ -89,14 +84,12 @@ def get_nvme_info(controller: str) -> Dict[str, Any]:
 
 
 def get_git_info() -> Dict[str, Any]:
-    """Get git repository information."""
     info = {
         "commit": None,
         "branch": None,
         "dirty": False,
     }
 
-    # Find repo root using git's built-in command
     repo_root = None
     try:
         result = subprocess.run(
@@ -153,7 +146,6 @@ def get_git_info() -> Dict[str, Any]:
 
 
 def get_fio_version() -> Optional[str]:
-    """Get fio version string."""
     try:
         result = subprocess.run(
             ["fio", "--version"],
@@ -168,7 +160,6 @@ def get_fio_version() -> Optional[str]:
 
 
 def check_fio_available() -> bool:
-    """Check if fio is available."""
     return get_fio_version() is not None
 
 
@@ -184,7 +175,6 @@ def collect_system_info(device_name: str, controller: str) -> Dict[str, Any]:
         result["nvme"] = get_nvme_info(controller)
         return result
 
-    # First call: collect and cache
     _cached_system_info = {
         "timestamp": datetime.now().isoformat(),
         "kernel": get_kernel_version(),
@@ -216,7 +206,6 @@ def capture_dmesg(filter_patterns: Optional[list] = None) -> str:
 
         lines = result.stdout.splitlines()
 
-        # Filter if patterns provided
         if filter_patterns:
             filtered = []
             for line in lines:

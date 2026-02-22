@@ -18,8 +18,6 @@ COUNTER_NAMES = [
 
 
 class QoSKernelStats:
-    """Interface to per-controller QoS debugfs counters."""
-
     def __init__(self, controller: str):
         """controller: e.g. 'nvme0'"""
         self.controller = controller
@@ -28,7 +26,6 @@ class QoSKernelStats:
 
     @property
     def available(self) -> bool:
-        """True if debugfs stats file exists and is readable."""
         stats_file = self._dir / "stats"
         try:
             return stats_file.exists() and stats_file.is_file()
@@ -36,13 +33,11 @@ class QoSKernelStats:
             return False
 
     def _warn_once(self, reason: str) -> None:
-        """Emit a one-time warning about unavailable stats."""
         if not self._warned:
             print(f"Warning: kernel QoS stats unavailable: {reason}", file=sys.stderr)
             self._warned = True
 
     def read_raw(self) -> Optional[str]:
-        """Read raw stats table from debugfs. Returns None if unavailable."""
         try:
             return (self._dir / "stats").read_text()
         except PermissionError:
@@ -56,7 +51,6 @@ class QoSKernelStats:
             return None
 
     def read_per_queue(self) -> Optional[list]:
-        """Parse stats into a list of per-queue dicts. Returns None if unavailable."""
         text = self.read_raw()
         if text is None:
             return None
@@ -78,7 +72,6 @@ class QoSKernelStats:
         return rows
 
     def read_aggregate(self) -> Optional[Dict[str, int]]:
-        """Sum counters across all I/O queues. Returns None if unavailable."""
         rows = self.read_per_queue()
         if rows is None:
             return None
@@ -90,7 +83,6 @@ class QoSKernelStats:
         return totals
 
     def reset(self) -> bool:
-        """Write to stats_reset to zero all counters. Returns True if successful."""
         try:
             reset_file = self._dir / "stats_reset"
             reset_file.write_text("1")
@@ -105,7 +97,6 @@ class QoSKernelStats:
 
     @staticmethod
     def delta(before: Dict[str, int], after: Dict[str, int]) -> Dict[str, int]:
-        """Compute delta between two snapshots."""
         return {name: after.get(name, 0) - before.get(name, 0)
                 for name in COUNTER_NAMES}
 
@@ -218,7 +209,6 @@ class QoSKernelStats:
         else:
             disp_str = "disp=0:0"
 
-        # Enqueue ratio
         hi_enq = counters.get("high_enqueued", 0)
         norm_enq = counters.get("normal_enqueued", 0)
         total_enq = hi_enq + norm_enq
@@ -245,7 +235,6 @@ class QoSKernelStats:
 
 
 def _si(n: int) -> str:
-    """Compact SI formatting for integers."""
     if n < 1000:
         return str(n)
     elif n < 1_000_000:

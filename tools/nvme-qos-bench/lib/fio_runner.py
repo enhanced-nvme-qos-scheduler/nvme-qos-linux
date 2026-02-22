@@ -2,20 +2,20 @@
 """FIO job generation and execution."""
 
 import json
-import os
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 
 from jinja2 import Environment, FileSystemLoader
 
-from .constants import FIO_TIMEOUT_MULTIPLIER, FIO_TIMEOUT_BUFFER_SEC, FIO_STDERR_LINES_ON_ERROR
-
 # Template directory
 TEMPLATES_DIR = Path(__file__).parent.parent / "jobs"
+
+FIO_TIMEOUT_MULTIPLIER = 2
+FIO_TIMEOUT_BUFFER_SEC = 60
+FIO_STDERR_LINES_ON_ERROR = 10
 
 
 @dataclass
@@ -140,7 +140,6 @@ class FioRunner:
         job_params = FioJobParams(device=self.device, **params)
         generate_job_file(template, job_params, job_file)
 
-        # Calculate timeout using constants
         runtime = params.get('runtime', 60)
         ramp_time = params.get('ramp_time', 5)
         timeout = (runtime + ramp_time) * FIO_TIMEOUT_MULTIPLIER + FIO_TIMEOUT_BUFFER_SEC
