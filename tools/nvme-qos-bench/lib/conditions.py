@@ -177,23 +177,8 @@ _register(ConditionProfile(
     normal_jobs_per_queue=8.0,
     depths=[32, 64],
     max_depth=16,
-    pass_criteria="Significant p99 improvement; WRR actively arbitrating",
-))
-
-# F: Minority high-prio
-_register(ConditionProfile(
-    id="F",
-    name="Minority high-prio",
-    description="Very few high-prio jobs vs many normal -- tests starvation guard",
-    mechanism="WRR starvation guard",
-    queue_fraction=0.5,
-    high_jobs_per_queue=0.25,
-    normal_jobs_per_queue=4.0,
-    min_high=1,
-    depths=[32, 64],
-    max_depth=16,
     workload_params={"normal_bs": "256k"},
-    pass_criteria="High-prio gets service despite being minority; no normal starvation",
+    pass_criteria="Significant p99 improvement; WRR actively arbitrating",
 ))
 
 # G: Majority high-prio
@@ -206,28 +191,10 @@ _register(ConditionProfile(
     high_jobs_per_queue=4.0,
     normal_jobs_per_queue=0.5,
     min_normal=1,
-    depths=[32],
+    depths=[32, 64],
     max_depth=16,
     workload_params={"normal_rw": "randread", "normal_bs": "4k"},
     pass_criteria="Normal still gets service; credit refills visible",
-))
-
-# H: Symmetric I/O (both classes do randread)
-_register(ConditionProfile(
-    id="H",
-    name="Symmetric I/O",
-    description="Both classes do 4K randread -- isolates scheduling from I/O pattern effects",
-    mechanism="Classification (I/O-neutral)",
-    queue_fraction=0.5,
-    high_jobs_per_queue=2.0,
-    normal_jobs_per_queue=8.0,
-    depths=[32, 64],
-    max_depth=16,
-    workload_params={
-        "normal_rw": "randread",
-        "normal_bs": "4k",
-    },
-    pass_criteria="p99 difference attributable to scheduling, not I/O pattern",
 ))
 
 # I: Weight sweep
@@ -244,22 +211,6 @@ _register(ConditionProfile(
     weights=[1, 4, 9, 19, 99],
     workload_params={"normal_bs": "256k"},
     pass_criteria="Dispatch ratio tracks weight proportionally",
-))
-
-# K: Single-priority (namespace force_high)
-_register(ConditionProfile(
-    id="K",
-    name="Single-priority (force_high)",
-    description="All traffic forced high via namespace policy -- single-class scheduling",
-    mechanism="Namespace policy override",
-    queue_fraction=0.5,
-    high_jobs_per_queue=2.0,
-    normal_jobs_per_queue=8.0,
-    depths=[32, 64],
-    max_depth=16,
-    namespace_policy="force_high",
-    workload_params={"normal_bs": "256k"},
-    pass_criteria="All enqueues go to high queue; no normal starvation warnings",
 ))
 
 

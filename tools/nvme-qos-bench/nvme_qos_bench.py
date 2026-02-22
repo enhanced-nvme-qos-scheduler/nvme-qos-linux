@@ -2844,7 +2844,7 @@ def main():
     run_parser.add_argument("--baseline", action="store_true",
                            help="Quick overhead check: QD1+QD4 single-job, QoS off vs on (~2 min)")
     run_parser.add_argument("-C", "--condition", metavar="ID",
-                           help="Load condition profile (A, C-D, F-I, K). Auto-scales to hardware.")
+                           help="Load condition profile (A, C, D, G, I). Auto-scales to hardware.")
 
     # Conditions command
     cond_parser = subparsers.add_parser(
@@ -2862,7 +2862,7 @@ def main():
 """
     )
     cond_parser.add_argument("condition_id", nargs="?", default=None, metavar="ID",
-        help="Show details for a specific condition (A-K)")
+        help="Show details for a specific condition (A, C, D, G, I)")
     cond_parser.add_argument("-d", "--device", metavar="DEV",
         help="Show resolved config for this device's HW queue count")
 
