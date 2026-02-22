@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  checkpatch:
-    name: checkpatch
+  lint:
+    name: lint
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -20,54 +20,8 @@ jobs:
         with:
           fetch-depth: 10
 
-      - name: Fetch base for diff
-        if: github.event_name == 'pull_request'
-        run: git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1
+      - name: Fetch master for merge-base
+        run: git fetch origin master --depth=1
 
-      - name: Run checkpatch on PR changes
-        if: github.event_name == 'pull_request'
-        run: |
-          # get the diff between base and head
-          git diff FETCH_HEAD..HEAD -- drivers/nvme/host/ > /tmp/pr.patch
-
-          if [[ -s /tmp/pr.patch ]]; then
-            echo "Checking changes in drivers/nvme/host/..."
-            output=$(./scripts/checkpatch.pl --no-tree --no-signoff /tmp/pr.patch 2>&1) || true
-            echo "$output"
-
-            # only fail on errors, not warnings
-            errors=$(echo "$output" | grep -oP 'total: \K[0-9]+(?= errors)' || echo "0")
-            if [[ "$errors" -gt 0 ]]; then
-              echo "::error::checkpatch found $errors error(s)"
-              exit 1
-            fi
-          else
-            echo "No changes in drivers/nvme/host/"
-          fi
-
-      - name: Run checkpatch on push changes
-        if: github.event_name == 'push'
-        run: |
-          # for pushes, check the diff in the pushed commits
-          if [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
-            git fetch origin ${{ github.event.before }} --depth=1 || true
-            git diff ${{ github.event.before }}..${{ github.sha }} -- drivers/nvme/host/ > /tmp/push.patch
-
-            if [[ -s /tmp/push.patch ]]; then
-              echo "Checking changes in drivers/nvme/host/..."
-              output=$(./scripts/checkpatch.pl --no-tree --no-signoff /tmp/push.patch 2>&1) || true
-              echo "$output"
-
-              # only fail on errors, not warnings
-              errors=$(echo "$output" | grep -oP 'total: \K[0-9]+(?= errors)' || echo "0")
-              if [[ "$errors" -gt 0 ]]; then
-                echo "::error::checkpatch found $errors error(s)"
-                exit 1
-              fi
-            else
-              echo "No changes in drivers/nvme/host/"
-            fi
-          else
-            echo "Initial push, skipping diff check"
-          fi
-
+      - name: Run lint
+        run: ./scripts/lint.sh
