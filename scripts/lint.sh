@@ -138,7 +138,6 @@ if [[ $FAST -eq 1 ]]; then
 		run_check "check_merge_conflicts" "! echo \"$STAGED_FILES\" | xargs -r grep -n -E '^(<{7}|>{7}|={7})'"
 	fi
 
-	# shellcheck disable=SC2086
 	run_check "check_modified_paths" "check_modified_paths $ALL_STAGED"
 else
 	echo "Checking changes vs master branch (errors only)..."
