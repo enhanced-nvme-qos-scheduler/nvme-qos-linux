@@ -3,10 +3,7 @@
 
 import sys
 import time
-from contextlib import contextmanager
-from typing import Optional, Iterator, Iterable, TypeVar
-
-T = TypeVar('T')
+from typing import Optional
 
 # ANSI color codes
 COLORS = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white']
@@ -115,28 +112,6 @@ class Progress:
     def elapsed(self) -> float:
         return time.time() - self.start_time
 
-def tqdm(iterable: Iterable[T], desc: str = "", total: Optional[int] = None) -> Iterator[T]:
-    if total is None:
-        try:
-            total = len(iterable)  # type: ignore
-        except TypeError:
-            total = None
-
-    p = Progress(desc, total)
-    for i, x in enumerate(iterable):
-        p.set(i)
-        yield x
-    p.set(total or i + 1)
-    p.finish()
-
-@contextmanager
-def timing(desc: str = ""):
-    start = time.time()
-    yield
-    elapsed = time.time() - start
-    if desc:
-        print(f"{desc}: {elapsed:.2f}s", file=sys.stderr)
-
 def print_header(device: str, kernel: str, qos_available: bool, ks_available: Optional[bool] = None) -> None:
     from . import __version__
     qos_status = colored("available", "green") if qos_available else colored("unavailable", "yellow")
@@ -162,5 +137,3 @@ def print_summary(p99_range: tuple, iops_range: tuple, cpu_range: tuple,
         parts.append(f"norm_p99 {norm_p99_range[0]:+.1f}% to {norm_p99_range[1]:+.1f}%")
     print(f"summary: {' | '.join(parts)}", file=sys.stderr)
 
-def print_status(msg: str) -> None:
-    print(msg, file=sys.stderr)

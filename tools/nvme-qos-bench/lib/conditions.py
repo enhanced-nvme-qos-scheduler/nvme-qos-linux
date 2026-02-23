@@ -10,13 +10,11 @@ from typing import Dict, List, Optional
 
 from .config import BenchmarkConfig
 
-# Template defaults — single source of truth matching mixed_workload.fio.j2
 DEFAULT_NORMAL_BS = "1m"
 DEFAULT_NORMAL_RW = "write"
 
 
 def _parse_fio_size(s: str) -> int:
-    """Parse fio size string (e.g. '4k', '256k', '1m') to bytes."""
     s = s.lower().strip()
     multipliers = {'k': 1024, 'm': 1024**2, 'g': 1024**3}
     if s[-1] in multipliers:
@@ -26,7 +24,6 @@ def _parse_fio_size(s: str) -> int:
 
 @dataclass
 class ConditionProfile:
-    """A named load condition with auto-scaling rules."""
     id: str
     name: str
     description: str
@@ -205,10 +202,6 @@ _register(ConditionProfile(
 
 
 def get_condition(condition_id: str) -> ConditionProfile:
-    """Look up a condition profile by ID (case-insensitive).
-
-    Raises KeyError if not found.
-    """
     key = condition_id.upper()
     if key not in CONDITIONS:
         valid = ", ".join(sorted(CONDITIONS.keys()))
@@ -217,5 +210,4 @@ def get_condition(condition_id: str) -> ConditionProfile:
 
 
 def list_conditions() -> List[ConditionProfile]:
-    """Return all condition profiles in alphabetical order."""
     return [CONDITIONS[k] for k in sorted(CONDITIONS.keys())]

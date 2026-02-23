@@ -3,7 +3,7 @@
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 
 # t-distribution critical values for 95% CI (two-tailed)
 # Index by degrees of freedom (n-1)
@@ -135,37 +135,6 @@ def two_sample_ttest(sample1: List[float], sample2: List[float]) -> TTestResult:
     effect_size = (mean1 - mean2) / pooled_std if pooled_std > 0 else 0
 
     return TTestResult(t_stat, p_value, significant, effect_size)
-
-
-def detect_outliers_iqr(values: List[float], k: float = 1.5) -> Tuple[List[float], List[int]]:
-    """Detect outliers using IQR method.
-
-    Returns (outlier_values, outlier_indices).
-    """
-    if len(values) < 4:
-        return [], []
-
-    sorted_vals = sorted(values)
-    n = len(sorted_vals)
-
-    q1_idx = n // 4
-    q3_idx = 3 * n // 4
-
-    q1 = sorted_vals[q1_idx]
-    q3 = sorted_vals[q3_idx]
-    iqr = q3 - q1
-
-    lower_bound = q1 - k * iqr
-    upper_bound = q3 + k * iqr
-
-    outliers = []
-    indices = []
-    for i, v in enumerate(values):
-        if v < lower_bound or v > upper_bound:
-            outliers.append(v)
-            indices.append(i)
-
-    return outliers, indices
 
 
 def detect_degraded_iterations(iterations: List[Dict]) -> List[int]:

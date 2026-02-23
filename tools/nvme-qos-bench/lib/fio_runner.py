@@ -20,7 +20,6 @@ FIO_STDERR_LINES_ON_ERROR = 10
 
 @dataclass
 class FioJobParams:
-    """Parameters for FIO job generation."""
     device: str
     runtime: int = 60
     ramp_time: int = 5

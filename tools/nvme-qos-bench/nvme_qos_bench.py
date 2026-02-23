@@ -20,10 +20,7 @@ from typing import Dict, Any, List, Optional
 sys.path.insert(0, str(Path(__file__).parent))
 
 from lib import __version__
-from lib.config import (
-    BenchmarkConfig, UserPreferences, load_config,
-    QUICK_CONFIG, DEFAULT_CONFIG, STRESS_CONFIG,
-)
+from lib.config import BenchmarkConfig, UserPreferences
 from lib.conditions import get_condition, list_conditions
 from lib.device import (
     NVMeDevice, discover_nvme_devices, validate_device, check_qos_available,
@@ -33,15 +30,14 @@ from lib.system import (
 )
 from lib.fio_runner import FioRunner
 from lib.metrics import extract_fio_metrics, get_primary_metrics, get_normal_metrics
-from lib.analysis import calculate_stats, percentage_change, two_sample_ttest, compare_results, detect_degraded_iterations
+from lib.analysis import calculate_stats, percentage_change, two_sample_ttest, detect_degraded_iterations
 from lib.output import (
     save_json, save_csv, flatten_result, CSV_FIELDNAMES,
     generate_markdown_report, generate_comparison_report,
-    generate_analysis_report, generate_commit_comparison_report,
+    generate_analysis_report,
 )
 from lib.results_scanner import (
-    scan_results_dir, filter_by_commit, get_config_tuples,
-    pool_iterations_across_runs,
+    scan_results_dir, filter_by_commit,
 )
 from lib.progress import (
     Progress, colored, print_header, print_warning,
@@ -94,6 +90,35 @@ def cmd_check(args) -> int:
         print(colored("NVMe QoS not available (CONFIG_NVME_QOS not enabled)", "yellow"))
         print("  Rebuild kernel with CONFIG_NVME_QOS=y to enable QoS testing")
         print("  Baseline benchmarks will still run")
+
+    # Check QoS kernel stats (debugfs)
+    debugfs = Path("/sys/kernel/debug")
+    if not debugfs.is_dir():
+        print(colored("debugfs not mounted (no kernel stats)", "yellow"))
+        print("  Mount with: mount -t debugfs none /sys/kernel/debug")
+    else:
+        qos_controllers = [c for c in controllers if check_qos_available(c)]
+        if not qos_controllers:
+            print(colored("QoS stats not checked (no QoS-enabled controllers)", "yellow"))
+        else:
+            stats_ok = []
+            stats_missing = []
+            for ctrl in sorted(qos_controllers):
+                ks = QoSKernelStats(ctrl)
+                if ks.available:
+                    data = ks.read_aggregate()
+                    if data is not None:
+                        stats_ok.append(ctrl)
+                    else:
+                        stats_missing.append((ctrl, "read failed"))
+                else:
+                    stats_missing.append((ctrl, "stats file missing"))
+
+            if stats_ok:
+                print(colored(f"QoS kernel stats readable ({', '.join(stats_ok)})", "green"))
+            for ctrl, reason in stats_missing:
+                print(colored(f"QoS kernel stats unavailable for {ctrl}: {reason}", "yellow"))
+                print(f"  Expected: /sys/kernel/debug/nvme_qos/{ctrl}/stats")
 
     return 0
 
@@ -518,131 +543,6 @@ def _run_interleaved_depth(
     )
 
 
-def _run_cpu_overhead_suite(runner: FioRunner, device: NVMeDevice, config: BenchmarkConfig, results: Dict) -> None:
-    print_separator()
-    results["cpu_overhead"] = []
-
-    for depth in [1, 4]:
-        for qos_on in [False, True]:
-            device.set_qos_enabled(qos_on)
-            label = f"qos={'on' if qos_on else 'off'}"
-            depth_results = []
-            progress = Progress(f"cpu {label} qd={depth}", config.iterations)
-
-            for iteration in range(config.iterations):
-                progress.set(iteration)
-                success, fio_data = runner.run_high_priority(
-                    iodepth=depth,
-                    numjobs=1,
-                    runtime=config.runtime,
-                    ramp_time=config.ramp_time,
-                    iteration=iteration,
-                )
-                if success and fio_data:
-                    metrics = extract_fio_metrics(fio_data)
-                    depth_results.append(get_primary_metrics(metrics))
-
-            if not depth_results:
-                continue
-            avg = _aggregate_iterations(depth_results)
-            elapsed = progress.elapsed()
-            results["cpu_overhead"].append({
-                "config": {"qos_enabled": qos_on, "iodepth": depth, "phase": "cpu_overhead"},
-                "metrics": avg,
-                "iterations": depth_results,
-            })
-            progress.finish(
-                f"cpu {label} qd={depth:<2}: "
-                f"p99={format_us(avg['p99_us']):>8} "
-                f"iops={si_format(avg['iops']):>8} "
-                f"cpu={avg['cpu_pct']:5.1f}% "
-                f"[{elapsed:.1f}s]"
-            )
-
-    for depth in [1, 4]:
-        off_match = next(
-            (r for r in results["cpu_overhead"]
-             if r["config"]["iodepth"] == depth and not r["config"]["qos_enabled"]),
-            None
-        )
-        on_match = next(
-            (r for r in results["cpu_overhead"]
-             if r["config"]["iodepth"] == depth and r["config"]["qos_enabled"]),
-            None
-        )
-        if off_match and on_match:
-            p99_pct = percentage_change(
-                off_match["metrics"]["p99_us"],
-                on_match["metrics"]["p99_us"]
-            )
-            iops_pct = percentage_change(
-                off_match["metrics"]["iops"],
-                on_match["metrics"]["iops"]
-            )
-            print(
-                f"  qd={depth} delta: p99={p99_pct:+.1f}% iops={iops_pct:+.1f}%",
-                file=sys.stderr,
-            )
-
-
-def _run_isolation_suite(
-    runner: FioRunner, device: NVMeDevice, config: BenchmarkConfig,
-    results: Dict,
-) -> None:
-    print_separator()
-    results["isolation"] = []
-    device.set_qos_enabled(True)
-    device.set_qos_weight(config.weights[0] if config.weights else 9)
-
-    for prio_label, run_fn, default_numjobs in [
-        ("high", runner.run_high_priority, config.high_numjobs),
-        ("normal", runner.run_normal_priority, config.normal_numjobs),
-    ]:
-        for depth in config.depths:
-            if depth < 16 and len(config.depths) > 3:
-                continue
-
-            depth_results = []
-            progress = Progress(f"iso {prio_label} qd={depth}", config.iterations)
-
-            for iteration in range(config.iterations):
-                progress.set(iteration)
-                success, fio_data = run_fn(
-                    iodepth=depth,
-                    numjobs=default_numjobs,
-                    runtime=config.runtime,
-                    ramp_time=config.ramp_time,
-                    iteration=iteration,
-                )
-                if success and fio_data:
-                    metrics = extract_fio_metrics(fio_data)
-                    depth_results.append(get_primary_metrics(metrics))
-
-            if not depth_results:
-                continue
-            avg = _aggregate_iterations(depth_results)
-            elapsed = progress.elapsed()
-            results["isolation"].append({
-                "config": {
-                    "qos_enabled": True,
-                    "iodepth": depth,
-                    "phase": "isolation",
-                    "priority": prio_label,
-                },
-                "metrics": avg,
-                "iterations": depth_results,
-            })
-            util_pct = avg.get('io_util_pct', 0)
-            progress.finish(
-                f"iso {prio_label:<6} qd={depth:<3}: "
-                f"p99={format_us(avg['p99_us']):>8} "
-                f"iops={si_format(avg['iops']):>8} "
-                f"cpu={avg['cpu_pct']:5.1f}% "
-                f"util={util_pct:5.1f}% "
-                f"[{elapsed:.1f}s]"
-            )
-
-
 def run_benchmark_suite(
     device: NVMeDevice,
     config: BenchmarkConfig,
@@ -761,14 +661,7 @@ def run_benchmark_suite(
                     f"results may be affected",
                     "yellow"), file=sys.stderr)
 
-        if config.run_cpu_overhead and device.qos_available:
-            _run_cpu_overhead_suite(runner, device, config, results)
-
-        if config.run_isolation and device.qos_available:
-            _run_isolation_suite(runner, device, config, results)
-
     finally:
-        # Restore device state
         device.restore_state()
 
     # Store drift probes and weight order in results metadata
@@ -1010,6 +903,10 @@ def cmd_run_baseline(device: NVMeDevice, args) -> int:
     return 0 if all_pass else 1
 
 
+def _fmt_result(content: str, status: str) -> str:
+    return f"{content:<{62}} {status}"
+
+
 def _validate_policy_override(
     device: NVMeDevice,
     runner: FioRunner,
@@ -1052,7 +949,10 @@ def _validate_policy_override(
     }
 
     status = colored("PASS", "green") if force_high_pass else colored("FAIL", "red")
-    print(f"  force_high + BE traffic:  {hi_pct:>5.1f}% high enqueues (>= 95%)  {status}", file=sys.stderr)
+    print(_fmt_result(
+        f"  {'force_high + BE traffic:':<26} {hi_pct:5.1f}% {'high enqueues':<15}(>= 95%)",
+        status,
+    ), file=sys.stderr)
 
     # force_normal: RT traffic should be reclassified as normal
     device.set_qos_policy("force_normal")
@@ -1086,7 +986,10 @@ def _validate_policy_override(
     }
 
     status = colored("PASS", "green") if force_normal_pass else colored("FAIL", "red")
-    print(f"  force_normal + RT traffic: {norm_pct:>5.1f}% normal enqueues (>= 95%) {status}", file=sys.stderr)
+    print(_fmt_result(
+        f"  {'force_normal + RT traffic:':<26} {norm_pct:5.1f}% {'normal enqueues':<15} (>= 95%)",
+        status,
+    ), file=sys.stderr)
 
     device.set_qos_policy("default")
     return force_high_pass and force_normal_pass, results
@@ -1115,7 +1018,10 @@ def _validate_enable_disable(
     results["off"] = {"iops": off_iops, "pass": off_pass}
 
     status = colored("PASS", "green") if off_pass else colored("FAIL", "red")
-    print(f"  QoS off:  {si_format(off_iops):>8} IOPS                                       {status}", file=sys.stderr)
+    print(_fmt_result(
+        f"  {'QoS off:':<8} {si_format(off_iops):>7} IOPS",
+        status,
+    ), file=sys.stderr)
 
     # Phase 2: QoS enabled
     device.set_qos_enabled(True)
@@ -1139,7 +1045,10 @@ def _validate_enable_disable(
     results["on"] = {"iops": on_iops, "high_enqueued": hi_enq, "pass": on_pass}
 
     status = colored("PASS", "green") if on_pass else colored("FAIL", "red")
-    print(f"  QoS on:   {si_format(on_iops):>8} IOPS, {si_format(hi_enq):>6} high_enqueued         {status}", file=sys.stderr)
+    print(_fmt_result(
+        f"  {'QoS on:':<8} {si_format(on_iops):>7} IOPS, {si_format(hi_enq):>7} high_enqueued",
+        status,
+    ), file=sys.stderr)
 
     # Phase 3: QoS disabled again (round-trip)
     device.set_qos_enabled(False)
@@ -1156,7 +1065,10 @@ def _validate_enable_disable(
     results["off_roundtrip"] = {"iops": off2_iops, "pass": off2_pass}
 
     status = colored("PASS", "green") if off2_pass else colored("FAIL", "red")
-    print(f"  QoS off:  {si_format(off2_iops):>8} IOPS                                       {status}", file=sys.stderr)
+    print(_fmt_result(
+        f"  {'QoS off:':<8} {si_format(off2_iops):>7} IOPS",
+        status,
+    ), file=sys.stderr)
 
     return off_pass and on_pass and off2_pass, results
 
@@ -1198,7 +1110,10 @@ def _validate_classification(
     }
 
     status = colored("PASS", "green") if rt_pass else colored("FAIL", "red")
-    print(f"  RT-only:  {rt_hi_pct:>5.0f}% high enqueues                          {status}", file=sys.stderr)
+    print(_fmt_result(
+        f"  {'RT-only:':<8} {rt_hi_pct:5.1f}% {'high enqueues':<15}",
+        status,
+    ), file=sys.stderr)
 
     # BE-only: should all go to normal
     kernel_stats.reset()
@@ -1226,7 +1141,10 @@ def _validate_classification(
     }
 
     status = colored("PASS", "green") if be_pass else colored("FAIL", "red")
-    print(f"  BE-only:  {be_norm_pct:>5.0f}% normal enqueues                        {status}", file=sys.stderr)
+    print(_fmt_result(
+        f"  {'BE-only:':<8} {be_norm_pct:5.1f}% {'normal enqueues':<15}",
+        status,
+    ), file=sys.stderr)
 
     return rt_pass and be_pass, results
 
@@ -1538,43 +1456,30 @@ def _apply_cli_overrides(args, config, condition_profile):
 
 def _load_benchmark_config(args, device):
     """
-    Load benchmark config from args and device.
+    Load benchmark config from a condition profile.
     Returns: (config, condition_profile) tuple, or error code int.
     """
-    condition_profile = None
+    if not args.condition:
+        print(colored(
+            "Error: a condition profile is required. Use -C <ID> (e.g., -C D).\n"
+            "  Run './nvme_qos_bench.py conditions' to list available conditions.",
+            "red"
+        ), file=sys.stderr)
+        return 1
 
-    if args.condition:
-        try:
-            condition_profile = get_condition(args.condition)
-        except KeyError as e:
-            print(colored(f"Error: {e}", "red"), file=sys.stderr)
-            return 1
+    try:
+        condition_profile = get_condition(args.condition)
+    except KeyError as e:
+        print(colored(f"Error: {e}", "red"), file=sys.stderr)
+        return 1
 
-        hw_queues = device.get_hw_queue_count()
-        config = condition_profile.resolve(hw_queues)
-        _print_condition_diagnostics(condition_profile, config, hw_queues)
+    hw_queues = device.get_hw_queue_count()
+    config = condition_profile.resolve(hw_queues)
+    _print_condition_diagnostics(condition_profile, config, hw_queues)
 
-        # Condition A delegates to existing baseline overhead path
-        if condition_profile.use_baseline_path:
-            return cmd_run_baseline(device, args)
-
-    elif args.stress:
-        config = STRESS_CONFIG
-    elif args.quick:
-        config = QUICK_CONFIG
-    elif args.config:
-        # Catch common mistake: -c A (config) when user meant -C A (condition)
-        if len(args.config) <= 2 and args.config.upper() in "ABCDEFGHIJK":
-            print(colored(
-                f"Error: '{args.config}' looks like a condition ID, not a config file.\n"
-                f"  Use -C {args.config.upper()} (uppercase C) for condition profiles.\n"
-                f"  Use -c <name> for config presets (quick/default/full) or YAML paths.",
-                "red"
-            ), file=sys.stderr)
-            return 1
-        config = load_config(args.config)
-    else:
-        config = DEFAULT_CONFIG
+    # Condition A delegates to the baseline overhead path
+    if condition_profile.use_baseline_path:
+        return cmd_run_baseline(device, args)
 
     return (config, condition_profile)
 
@@ -1592,10 +1497,6 @@ def cmd_run(args) -> int:
         return 1
 
     device = NVMeDevice(device_name)
-
-    # Baseline overhead check (separate fast path)
-    if args.baseline:
-        return cmd_run_baseline(device, args)
 
     result = _load_benchmark_config(args, device)
     if isinstance(result, int):
@@ -2379,221 +2280,6 @@ def cmd_list(args) -> int:
     return 0
 
 
-def _compare_directories(baseline_dir: str, test_dir: str) -> int:
-    """Compare two result directories (existing behavior)."""
-    baseline_path = Path(baseline_dir)
-    test_path = Path(test_dir)
-
-    for d in [baseline_path, test_path]:
-        if not d.exists():
-            print(colored(f"Error: Directory not found: {d}", "red"), file=sys.stderr)
-            return 1
-
-    # Load results
-    with open(baseline_path / "aggregate.json") as f:
-        baseline_results = json.load(f)
-    with open(test_path / "aggregate.json") as f:
-        test_results = json.load(f)
-
-    # Compare
-    print("Comparison: Baseline vs Test")
-    print("=" * 80)
-    print(f"Baseline: {baseline_path}")
-    print(f"Test: {test_path}")
-    print()
-
-    baseline_by_depth = {r["config"]["iodepth"]: r for r in baseline_results.get("all", [])}
-    test_by_depth = {r["config"]["iodepth"]: r for r in test_results.get("all", [])}
-
-    # Print comparison for each percentile
-    for pct_name, pct_key in [("p50", "p50_us"), ("p90", "p90_us"), ("p99", "p99_us"), ("p999", "p999_us")]:
-        print(f"{pct_name} Latency Comparison:")
-        print(f"| {'QD':>3} | {'Baseline':>10} | {'Test':>10} | {'Change':>8} |")
-        print(f"|{'-'*5}|{'-'*12}|{'-'*12}|{'-'*10}|")
-
-        for depth in sorted(set(baseline_by_depth.keys()) | set(test_by_depth.keys())):
-            b = baseline_by_depth.get(depth, {}).get("metrics", {})
-            t = test_by_depth.get(depth, {}).get("metrics", {})
-
-            b_val = b.get(pct_key, 0)
-            t_val = t.get(pct_key, 0)
-            change = percentage_change(b_val, t_val) if b_val else 0
-
-            print(f"| {depth:>3} | {format_us(b_val):>10} | {format_us(t_val):>10} | {change:>+7.1f}% |")
-        print()
-
-    return 0
-
-
-def _compare_commits(args) -> int:
-    """Compare benchmark results across git commits with statistical significance."""
-    results_dir = Path(args.results_dir)
-    if not results_dir.is_dir():
-        print(colored(f"Error: Results directory not found: {results_dir}", "red"), file=sys.stderr)
-        return 1
-
-    all_runs = scan_results_dir(results_dir)
-    base_runs = filter_by_commit(all_runs, args.base_commit)
-    test_runs = filter_by_commit(all_runs, args.test_commit)
-
-    if not base_runs:
-        print(colored(f"Error: No runs found for base commit '{args.base_commit}'", "red"), file=sys.stderr)
-        return 1
-    if not test_runs:
-        print(colored(f"Error: No runs found for test commit '{args.test_commit}'", "red"), file=sys.stderr)
-        return 1
-
-    # Extract commit info for headers
-    base_commit = base_runs[0].commit or args.base_commit
-    test_commit = test_runs[0].commit or args.test_commit
-    base_branch = base_runs[0].branch or "?"
-    test_branch = test_runs[0].branch or "?"
-    base_dirty = any(r.dirty for r in base_runs)
-    test_dirty = any(r.dirty for r in test_runs)
-
-    metric_key = args.metric if args.metric else "p99_us"
-    metric_label = metric_key.replace("_us", "").upper() if metric_key.endswith("_us") else metric_key
-
-    # Header
-    print()
-    print(colored("=== NVMe QoS Commit Comparison ===", "cyan"))
-    base_dirty_str = ", dirty" if base_dirty else ""
-    test_dirty_str = ", dirty" if test_dirty else ""
-    print(f"Base: {base_commit[:7]} ({base_branch}{base_dirty_str}) -- {len(base_runs)} runs")
-    print(f"Test: {test_commit[:7]} ({test_branch}{test_dirty_str}) -- {len(test_runs)} runs")
-
-    if base_dirty or test_dirty:
-        print(colored("* Both commits have dirty working tree -- results may not be reproducible", "yellow"))
-    print()
-
-    # Find matching configs
-    base_tuples = set()
-    for r in base_runs:
-        base_tuples |= get_config_tuples(r)
-    test_tuples = set()
-    for r in test_runs:
-        test_tuples |= get_config_tuples(r)
-    common_tuples = base_tuples & test_tuples
-
-    if not common_tuples:
-        print(colored("No matching configs found between the two commits.", "yellow"))
-        return 0
-
-    # Group by qos_enabled
-    baseline_configs = sorted([t for t in common_tuples if not t[0]], key=lambda t: t[1])
-    qos_configs = sorted([t for t in common_tuples if t[0]], key=lambda t: (t[1], t[2] or 0))
-
-    comparisons = []
-
-    for section_name, configs in [("Baseline (QoS off)", baseline_configs), ("QoS", qos_configs)]:
-        if not configs:
-            continue
-
-        print(colored(f"-- {section_name} {metric_label} Latency ", "cyan") + "-" * 40)
-        print(f"{'':>8} {'Base mean [CI]':>24} {'Test mean [CI]':>24} {'Change':>8} {'Sig?':>4}")
-
-        for qos_enabled, iodepth, qos_weight, workload in configs:
-            base_vals = pool_iterations_across_runs(
-                base_runs, qos_enabled, iodepth, qos_weight, workload, metric_key)
-            test_vals = pool_iterations_across_runs(
-                test_runs, qos_enabled, iodepth, qos_weight, workload, metric_key)
-
-            if not base_vals or not test_vals:
-                continue
-
-            result = compare_results(base_vals, test_vals)
-            comparisons.append(result)
-
-            bs = result["baseline"]
-            ts = result["test"]
-            pct = result["pct_change"]
-            ttest = result["ttest"]
-
-            # Format label
-            if qos_enabled:
-                label = f"qd={iodepth}"
-                if qos_weight is not None:
-                    label += f" w={qos_weight}"
-            else:
-                label = f"qd={iodepth}"
-            if workload:
-                label += f" {workload}"
-
-            # Format stats
-            base_str = f"{format_us(bs.mean)} [{format_us(bs.ci_low)}, {format_us(bs.ci_high)}]"
-            test_str = f"{format_us(ts.mean)} [{format_us(ts.ci_low)}, {format_us(ts.ci_high)}]"
-            change_str = f"{pct:+.1f}%"
-
-            n_min = min(bs.n, ts.n)
-            if n_min < 2:
-                sig_str = "N/A"
-            elif n_min < 5:
-                sig_str = colored(f"n={n_min}", "yellow")
-            elif ttest.significant:
-                d_label = _effect_size_label(ttest.effect_size)
-                sig_str = colored(
-                    f"YES (p<0.05, d={abs(ttest.effect_size):.2f})",
-                    "green" if pct < 0 else "red"
-                )
-            else:
-                d_label = _effect_size_label(ttest.effect_size)
-                sig_str = f"NO  (p>=0.05, d={abs(ttest.effect_size):.2f})"
-
-            print(f" {label:>7} {base_str:>24} {test_str:>24} {change_str:>8} {sig_str}")
-
-        print()
-
-    # Summary
-    print(colored("-- Summary ", "cyan") + "-" * 63)
-    significant_regressions = [c for c in comparisons
-                               if c["ttest"].significant and c["pct_change"] > 0]
-    significant_improvements = [c for c in comparisons
-                                if c["ttest"].significant and c["pct_change"] < 0]
-
-    if significant_regressions:
-        print(colored(f"{len(significant_regressions)} statistically significant regression(s) detected.", "red"))
-    elif significant_improvements:
-        print(colored(f"{len(significant_improvements)} statistically significant improvement(s) detected.", "green"))
-    else:
-        print("No statistically significant regressions detected.")
-
-    # Check sample sizes
-    min_samples = min((min(c["baseline"].n, c["test"].n) for c in comparisons), default=0)
-    if min_samples < 5:
-        print(colored(f"* Low sample sizes (min n={min_samples}). Rerun with --iterations 5+ for higher confidence.", "yellow"))
-
-    if args.output:
-        md = generate_commit_comparison_report(
-            base_runs, test_runs, comparisons, metric_key,
-            base_commit, test_commit, base_branch, test_branch,
-            base_dirty, test_dirty,
-        )
-        out_path = Path(args.output)
-        with open(out_path, "w") as f:
-            f.write(md)
-        print(f"\nMarkdown report written to: {out_path}")
-
-    print()
-    return 0
-
-
-def cmd_compare(args) -> int:
-    """Compare two result sets or two commits."""
-    # Route to appropriate comparison mode
-    has_dirs = args.baseline and args.test
-    has_commits = args.base_commit and args.test_commit
-
-    if has_dirs:
-        return _compare_directories(args.baseline, args.test)
-    elif has_commits:
-        return _compare_commits(args)
-    else:
-        print(colored(
-            "Error: Provide either (-b/--baseline + -t/--test) or (--base-commit + --test-commit)",
-            "red"
-        ), file=sys.stderr)
-        return 1
-
 
 def _print_condition_detail(c, hw_queues: Optional[int] = None) -> None:
     """Print detailed info for a single condition profile."""
@@ -2744,23 +2430,17 @@ def main():
         "run",
         help="Run benchmark suite",
         epilog="""Examples:
-  Quick test (~5 min):
-    ./nvme_qos_bench.py run -d nvme0n1p7 --quick
+  Device-saturation contention condition (~30 min):
+    ./nvme_qos_bench.py run -d nvme0n1p7 -C D
 
-  Full default suite (~20 min):
-    ./nvme_qos_bench.py run -d nvme0n1p7
+  Weight sweep for proportionality validation:
+    ./nvme_qos_bench.py run -d nvme0n1p7 -C I
 
-  Stress test with high contention (~30 min):
-    ./nvme_qos_bench.py run -d nvme0n1p7 --stress
+  Override depths and weights for a condition:
+    ./nvme_qos_bench.py run -d nvme0n1p7 -C D --depths 32 64 --weights 4 9 19
 
-  Custom depths and weights:
-    ./nvme_qos_bench.py run -d nvme0n1p7 --depths 8 16 32 --weights 7 9 11
-
-  Load condition profile:
-    ./nvme_qos_bench.py run -d nvme0n1p7 -C A
-
-  Baseline overhead check (~2 min):
-    ./nvme_qos_bench.py run -d nvme0n1p7 --baseline
+  List all conditions:
+    ./nvme_qos_bench.py conditions
 """
     )
     run_parser.add_argument("-d", "--device", metavar="DEV", help="NVMe device (e.g., nvme0n1p7)")
@@ -2768,10 +2448,6 @@ def main():
                            help="Clear saved device preference")
     run_parser.add_argument("-o", "--output", metavar="DIR", default="./results",
                            help="Output directory (default: ./results)")
-    run_parser.add_argument("-c", "--config", metavar="CFG", help="Config file or preset (quick/default/full)")
-    run_parser.add_argument("--quick", action="store_true", help="Use quick preset (~5 min)")
-    run_parser.add_argument("--stress", action="store_true",
-                           help="Use stress preset: high contention to exercise WRR (~25-35 min)")
     run_parser.add_argument("--iterations", type=int, metavar="N", help="Iterations per config")
     run_parser.add_argument("--runtime", type=int, metavar="SEC", help="Seconds per test")
     run_parser.add_argument("--depths", type=int, nargs="+", metavar="QD", help="Queue depths to test")
@@ -2792,9 +2468,7 @@ def main():
                            help="Pin fio to N CPUs to force N HW queues (increases per-queue contention)")
     run_parser.add_argument("--compare", action="store_true",
                            help="Generate comparison report")
-    run_parser.add_argument("--baseline", action="store_true",
-                           help="Quick overhead check: QD1+QD4 single-job, QoS off vs on (~2 min)")
-    run_parser.add_argument("-C", "--condition", metavar="ID",
+    run_parser.add_argument("-c", "-C", "--condition", metavar="ID",
                            help="Load condition profile (A, C, D, G, I). Auto-scales to hardware.")
 
     # Conditions command
@@ -2866,34 +2540,6 @@ def main():
                              help="Results directory (default: ./results)")
     list_parser.add_argument("--commit", metavar="SHA", help="Filter by commit prefix")
 
-    # Compare command
-    compare_parser = subparsers.add_parser(
-        "compare",
-        help="Compare two result sets or commits",
-        epilog="""Examples:
-  Compare two result directories:
-    ./nvme_qos_bench.py compare -b ./results/baseline-abc1234 -t ./results/test-def5678
-
-  Compare two commits:
-    ./nvme_qos_bench.py compare --base-commit abc1234 --test-commit def5678
-
-  Compare with custom metric:
-    ./nvme_qos_bench.py compare -b baseline-dir -t test-dir --metric iops
-
-  Write comparison to file:
-    ./nvme_qos_bench.py compare -b baseline-dir -t test-dir -o comparison.md
-"""
-    )
-    compare_parser.add_argument("-b", "--baseline", metavar="DIR", help="Baseline results dir")
-    compare_parser.add_argument("-t", "--test", metavar="DIR", help="Test results dir")
-    compare_parser.add_argument("--base-commit", metavar="SHA", help="Base commit SHA prefix")
-    compare_parser.add_argument("--test-commit", metavar="SHA", help="Test commit SHA prefix")
-    compare_parser.add_argument("--results-dir", metavar="DIR", default="./results",
-                                help="Results directory for commit comparison (default: ./results)")
-    compare_parser.add_argument("--metric", metavar="NAME", default="p99_us",
-                                help="Metric to compare (default: p99_us)")
-    compare_parser.add_argument("-o", "--output", metavar="FILE", help="Write markdown report to file")
-
     args = parser.parse_args()
 
     try:
@@ -2909,14 +2555,12 @@ def main():
             return cmd_analyze(args)
         elif args.command == "list":
             return cmd_list(args)
-        elif args.command == "compare":
-            return cmd_compare(args)
         else:
             parser.print_help()
             return 0
     except KeyboardInterrupt:
         print("\n\nInterrupted by user", file=sys.stderr)
-        return 130
+        return 1
     except Exception as e:
         print(colored(f"Error: {e}", "red"), file=sys.stderr)
         print("An unexpected error occurred. This may be a bug.", file=sys.stderr)
