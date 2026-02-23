@@ -186,6 +186,3 @@ sphinx_*/
 /rust-project.json
 *.iso
 *.img
-
-# NVME QoS Fio testing output
-/results/

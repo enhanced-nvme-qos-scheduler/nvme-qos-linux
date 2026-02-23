@@ -2162,7 +2162,20 @@ def _print_analyze_summary(results: Dict, config_info: Optional[Dict] = None) ->
 
 def cmd_analyze(args) -> int:
     """Analyze existing benchmark results with comprehensive output."""
-    input_dir = Path(args.input)
+    if args.input is None:
+        results_dir = Path(args.results_dir)
+        runs = scan_results_dir(results_dir)
+        recent = next(
+            (r for r in runs if (r.path / "aggregate.json").exists()), None
+        )
+        if recent is None:
+            print(colored(f"Error: No benchmark runs with results found in {results_dir}", "red"),
+                  file=sys.stderr)
+            return 1
+        print(f"Using most recent run: {recent.path}")
+        input_dir = recent.path
+    else:
+        input_dir = Path(args.input)
 
     if not input_dir.exists():
         print(colored(f"Error: Directory not found: {input_dir}", "red"), file=sys.stderr)
@@ -2446,8 +2459,8 @@ def main():
     run_parser.add_argument("-d", "--device", metavar="DEV", help="NVMe device (e.g., nvme0n1p7)")
     run_parser.add_argument("--reset-device", action="store_true",
                            help="Clear saved device preference")
-    run_parser.add_argument("-o", "--output", metavar="DIR", default="./results",
-                           help="Output directory (default: ./results)")
+    run_parser.add_argument("-o", "--output", metavar="DIR", default="./.nvme-qos-results",
+                           help="Output directory (default: ./.nvme-qos-results)")
     run_parser.add_argument("--iterations", type=int, metavar="N", help="Iterations per config")
     run_parser.add_argument("--runtime", type=int, metavar="SEC", help="Seconds per test")
     run_parser.add_argument("--depths", type=int, nargs="+", metavar="QD", help="Queue depths to test")
@@ -2503,22 +2516,28 @@ def main():
     validate_parser.add_argument("-d", "--device", metavar="DEV", help="NVMe device (e.g., nvme0n1p7)")
     validate_parser.add_argument("--reset-device", action="store_true",
                                  help="Clear saved device preference")
-    validate_parser.add_argument("-o", "--output", metavar="DIR", default="./results",
-                                 help="Output directory (default: ./results)")
+    validate_parser.add_argument("-o", "--output", metavar="DIR", default="./.nvme-qos-results",
+                                 help="Output directory (default: ./.nvme-qos-results)")
 
     # Analyze command
     analyze_parser = subparsers.add_parser(
         "analyze",
         help="Analyze existing results",
         epilog="""Examples:
-  Analyze results to terminal:
-    ./nvme_qos_bench.py analyze -i ./results/20260220-143012-abc1234
+  Analyze most recent run:
+    ./nvme_qos_bench.py analyze
+
+  Analyze specific results to terminal:
+    ./nvme_qos_bench.py analyze -i ./.nvme-qos-results/run_2026-02-20_14-30-12
 
   Write markdown report to file:
-    ./nvme_qos_bench.py analyze -i ./results/20260220-143012-abc1234 -o report.md
+    ./nvme_qos_bench.py analyze -i ./.nvme-qos-results/run_2026-02-20_14-30-12 -o report.md
 """
     )
-    analyze_parser.add_argument("-i", "--input", required=True, metavar="DIR", help="Results directory")
+    analyze_parser.add_argument("-i", "--input", required=False, default=None, metavar="DIR",
+                                help="Results directory (default: most recent run in --results-dir)")
+    analyze_parser.add_argument("--results-dir", metavar="DIR", default="./.nvme-qos-results",
+                                help="Directory to search for most recent run (default: ./.nvme-qos-results)")
     analyze_parser.add_argument("-o", "--output", metavar="FILE", help="Write markdown report to file")
 
     # List command
@@ -2530,14 +2549,14 @@ def main():
     ./nvme_qos_bench.py list
 
   List runs from specific results directory:
-    ./nvme_qos_bench.py list --results-dir /path/to/results
+    ./nvme_qos_bench.py list --results-dir /path/to/.nvme-qos-results
 
   Filter by commit SHA prefix:
     ./nvme_qos_bench.py list --commit abc1234
 """
     )
-    list_parser.add_argument("--results-dir", metavar="DIR", default="./results",
-                             help="Results directory (default: ./results)")
+    list_parser.add_argument("--results-dir", metavar="DIR", default="./.nvme-qos-results",
+                             help="Results directory (default: ./.nvme-qos-results)")
     list_parser.add_argument("--commit", metavar="SHA", help="Filter by commit prefix")
 
     args = parser.parse_args()
