@@ -138,12 +138,16 @@ if [[ $FAST -eq 1 ]]; then
 		run_check "check_merge_conflicts" "! echo \"$STAGED_FILES\" | xargs -r grep -n -E '^(<{7}|>{7}|={7})'"
 	fi
 
-	run_check "check_modified_paths" "check_modified_paths $ALL_STAGED"
+	run_check "check_modified_paths" "check_modified_paths $(echo $ALL_STAGED)"
 else
 	echo "Checking changes vs master branch (errors only)..."
 	echo ""
 
-	MERGE_BASE=$(git merge-base HEAD master 2>/dev/null || echo "")
+	if [[ -n "${BASE_SHA:-}" ]]; then
+		MERGE_BASE="$BASE_SHA"
+	else
+		MERGE_BASE=$(git merge-base HEAD master 2>/dev/null || echo "")
+	fi
 	UNCOMMITTED=$(git diff HEAD -- drivers/nvme/host/)
 	if [[ -n "$UNCOMMITTED" ]]; then
 		run_checkpatch "checkpatch (uncommitted)" "$UNCOMMITTED"
@@ -167,7 +171,7 @@ else
 	if [[ -n "$MERGE_BASE" ]]; then
 		ALL_CHANGED=$(git diff "$MERGE_BASE"..HEAD --name-only || true)
 		if [[ -n "$ALL_CHANGED" ]]; then
-			run_check "check_modified_paths" "check_modified_paths $ALL_CHANGED"
+			run_check "check_modified_paths" "check_modified_paths $(echo $ALL_CHANGED)"
 		else
 			echo -e "check_modified_paths..........................[${GREEN}ok${NC}] (no changes)"
 		fi

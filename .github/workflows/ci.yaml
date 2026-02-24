@@ -21,7 +21,9 @@ jobs:
           fetch-depth: 10
 
       - name: Fetch master for merge-base
-        run: git fetch origin master --depth=1
+        run: |
+          git fetch origin master --depth=1
+          echo "BASE_SHA=$(git rev-parse FETCH_HEAD)" >> $GITHUB_ENV
 
       - name: Run lint
         run: ./scripts/lint.sh
