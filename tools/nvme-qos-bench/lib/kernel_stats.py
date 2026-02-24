@@ -207,7 +207,9 @@ class QoSKernelStats:
             norm_pct = 100 - hi_pct
             disp_str = f"disp={hi_pct}:{norm_pct}"
         else:
-            disp_str = "disp=0:0"
+            # Zero dispatch counters on a QoS-on run most likely means bypass mode
+            # was active (qos_bypass=1) rather than a scheduler failure.
+            disp_str = "disp=0:0(bypass?)"
 
         hi_enq = counters.get("high_enqueued", 0)
         norm_enq = counters.get("normal_enqueued", 0)

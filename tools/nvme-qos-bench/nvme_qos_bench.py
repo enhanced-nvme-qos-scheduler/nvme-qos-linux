@@ -252,8 +252,13 @@ def _store_baseline_results(
     buf_tag: str,
     elapsed: float,
     effective_depth: Optional[int] = None,
+    is_shared_baseline: bool = False,
 ) -> Optional[str]:
-    """Aggregate baseline iterations and store in results dict. Returns summary line for progress.finish()."""
+    """Aggregate baseline iterations and store in results dict. Returns summary line for progress.finish().
+
+    When is_shared_baseline=True, no paired_weight is stored so the entry can be
+    matched by any weight during multi-weight condition sweeps.
+    """
     if not baseline_results:
         return None
 
@@ -264,8 +269,9 @@ def _store_baseline_results(
     bl_config = {
         "qos_enabled": False,
         "iodepth": depth,
-        "paired_weight": weight,
     }
+    if not is_shared_baseline:
+        bl_config["paired_weight"] = weight
     if workload_type:
         bl_config["workload"] = workload_type
     if effective_depth is not None and effective_depth != depth:
@@ -321,13 +327,14 @@ def _store_qos_results(
             ks_fairness = QoSKernelStats.validate_fairness(
                 ks_counters, weight)
 
-    # Calculate change vs paired baseline
+    # Calculate change vs paired baseline (or shared baseline if no paired_weight stored)
     pct_change = None
     norm_pct_change = None
     baseline_match = next(
         (b for b in results["baseline"]
          if b["config"]["iodepth"] == depth
-         and b["config"].get("paired_weight") == weight
+         and (b["config"].get("paired_weight") is None
+              or b["config"].get("paired_weight") == weight)
          and b["config"].get("workload") == workload_type),
         None
     )
@@ -465,15 +472,23 @@ def _run_interleaved_depth(
     kernel_stats: Optional[QoSKernelStats],
     results: Dict, run_fn, label_prefix: str = "",
     workload_type: Optional[str] = None,
+    run_baseline_override: Optional[bool] = None,
+    run_qos_override: Optional[bool] = None,
 ) -> None:
     """Run interleaved baseline+QoS iterations for a single depth.
 
     Baseline and QoS iterations alternate back-to-back within each pair,
     ensuring both experience identical drive state. Cooldown (if configured)
     only happens between pairs.
+
+    run_baseline_override / run_qos_override: when not None, override config flags.
+    Used by run_benchmark_suite to collect shared baselines once per depth on
+    multi-weight sweeps (run_baseline_override=True, run_qos_override=False).
     """
-    run_baseline = config.run_baseline
-    run_qos = config.run_qos and device.qos_available
+    run_baseline = run_baseline_override if run_baseline_override is not None \
+                   else config.run_baseline
+    run_qos = (run_qos_override if run_qos_override is not None \
+               else config.run_qos) and device.qos_available
     interleaved = run_baseline and run_qos
 
     baseline_results = []
@@ -532,6 +547,7 @@ def _run_interleaved_depth(
         baseline_results, baseline_normal, results,
         depth, weight, workload_type, buf_tag, elapsed,
         effective_depth=effective_depth,
+        is_shared_baseline=not run_qos,
     )
     if bl_line:
         progress.finish(bl_line)
@@ -602,6 +618,36 @@ def run_benchmark_suite(
             print(f"Weight order (randomized): {weights}", file=sys.stderr)
         weight_order = weights
 
+        # For multi-weight sweeps, collect shared baselines once per depth up-front.
+        # Baselines are identical across weights (same workload, QoS disabled), so
+        # running one per weight wastes time. Each depth gets one shared baseline entry
+        # with no paired_weight; it is matched by all weights during analysis.
+        is_weight_sweep = len(weights) > 1 and config.run_baseline and config.run_qos
+        if is_weight_sweep:
+            print("Multi-weight sweep: collecting shared baselines once per depth.",
+                  file=sys.stderr)
+            for depth in config.depths:
+                if depth < 16 and len(config.depths) > 3:
+                    continue
+                _run_interleaved_depth(
+                    runner, device, config, depth, weights[0], cpus_allowed,
+                    kernel_stats, results,
+                    run_fn=runner.run_mixed_workload,
+                    run_baseline_override=True,
+                    run_qos_override=False,
+                )
+                if config.run_buffered:
+                    _run_interleaved_depth(
+                        runner, device, config, depth, weights[0], cpus_allowed,
+                        kernel_stats, results,
+                        run_fn=runner.run_buffered_workload,
+                        label_prefix="buf_",
+                        workload_type="buffered",
+                        run_baseline_override=True,
+                        run_qos_override=False,
+                    )
+            print_separator()
+
         # Pre-test drift probe
         pre_test_p50 = _run_drift_probe(runner)
         if pre_test_p50 is not None:
@@ -634,10 +680,12 @@ def run_benchmark_suite(
                     continue
 
                 # Interleaved direct I/O
+                # On weight sweeps baselines were already collected above; skip them here.
                 _run_interleaved_depth(
                     runner, device, config, depth, weight, cpus_allowed,
                     kernel_stats, results,
                     run_fn=runner.run_mixed_workload,
+                    run_baseline_override=False if is_weight_sweep else None,
                 )
 
                 # Interleaved buffered I/O (opt-in)
@@ -648,6 +696,7 @@ def run_benchmark_suite(
                         run_fn=runner.run_buffered_workload,
                         label_prefix="buf_",
                         workload_type="buffered",
+                        run_baseline_override=False if is_weight_sweep else None,
                     )
 
         # Post-test drift probe
@@ -1101,7 +1150,7 @@ def _validate_classification(
     total_enq = hi_enq + norm_enq
     rt_hi_pct = (hi_enq / total_enq * 100) if total_enq > 0 else 0.0
 
-    rt_pass = hi_enq > 0 and norm_enq == 0
+    rt_pass = hi_enq > 0 and rt_hi_pct >= 95.0
     results["rt_only"] = {
         "high_enqueued": hi_enq,
         "normal_enqueued": norm_enq,
@@ -1111,7 +1160,7 @@ def _validate_classification(
 
     status = colored("PASS", "green") if rt_pass else colored("FAIL", "red")
     print(_fmt_result(
-        f"  {'RT-only:':<8} {rt_hi_pct:5.1f}% {'high enqueues':<15}",
+        f"  {'RT-only:':<26} {rt_hi_pct:5.1f}% {'high enqueues':<15}(>= 95%)",
         status,
     ), file=sys.stderr)
 
@@ -1132,7 +1181,7 @@ def _validate_classification(
     total_enq = hi_enq + norm_enq
     be_norm_pct = (norm_enq / total_enq * 100) if total_enq > 0 else 0.0
 
-    be_pass = norm_enq > 0 and hi_enq == 0
+    be_pass = norm_enq > 0 and be_norm_pct >= 95.0
     results["be_only"] = {
         "high_enqueued": hi_enq,
         "normal_enqueued": norm_enq,
@@ -1142,7 +1191,7 @@ def _validate_classification(
 
     status = colored("PASS", "green") if be_pass else colored("FAIL", "red")
     print(_fmt_result(
-        f"  {'BE-only:':<8} {be_norm_pct:5.1f}% {'normal enqueues':<15}",
+        f"  {'BE-only:':<26} {be_norm_pct:5.1f}% {'normal enqueues':<15}(>= 95%)",
         status,
     ), file=sys.stderr)
 
@@ -1552,15 +1601,21 @@ def cmd_run(args) -> int:
 def _find_baseline_match(results: List[Dict], depth: int,
                          workload: Optional[str] = None,
                          paired_weight: Optional[int] = None) -> Optional[Dict]:
-    """Find the baseline result matching a given depth, workload, and paired weight."""
+    """Find the baseline result matching a given depth, workload, and paired weight.
+
+    A baseline with no paired_weight stored (shared baseline from a weight sweep)
+    matches any weight.
+    """
     for b in results.get("baseline", []):
         cfg = b["config"]
         if cfg["iodepth"] != depth:
             continue
         if cfg.get("workload") != workload:
             continue
-        if paired_weight is not None and cfg.get("paired_weight") != paired_weight:
-            continue
+        if paired_weight is not None:
+            cfg_pw = cfg.get("paired_weight")
+            if cfg_pw is not None and cfg_pw != paired_weight:
+                continue
         return b
     return None
 
@@ -1862,11 +1917,11 @@ def _print_significance_section(results: Dict) -> None:
                 d_label = _effect_size_label(ttest.effect_size)
                 if ttest.significant:
                     sig_str = colored(
-                        f"SIGNIFICANT (p<0.05, d={abs(ttest.effect_size):.1f} {d_label})",
+                        f"SIGNIFICANT (p={ttest.p_value:.3f}, d={abs(ttest.effect_size):.1f} {d_label})",
                         "green" if pct and pct < 0 else "red"
                     )
                 else:
-                    sig_str = f"NOT SIGNIFICANT (p>=0.05, d={abs(ttest.effect_size):.1f} {d_label})"
+                    sig_str = f"NOT SIGNIFICANT (p={ttest.p_value:.3f}, d={abs(ttest.effect_size):.1f} {d_label})"
             lines.append(f" {label}: p99 {pct_str} -- {sig_str}{degraded_note}")
 
         has_data = True

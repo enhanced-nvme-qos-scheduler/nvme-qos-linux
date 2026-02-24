@@ -713,9 +713,9 @@ def generate_commit_comparison_report(
         if n_min < 2:
             sig_str = "N/A"
         elif ttest.significant:
-            sig_str = f"YES (d={abs(ttest.effect_size):.2f})"
+            sig_str = f"YES (p={ttest.p_value:.3f}, d={abs(ttest.effect_size):.2f})"
         else:
-            sig_str = f"NO (d={abs(ttest.effect_size):.2f})"
+            sig_str = f"NO (p={ttest.p_value:.3f}, d={abs(ttest.effect_size):.2f})"
 
         # We don't have the config label stored on the comparison result,
         # so use a generic row

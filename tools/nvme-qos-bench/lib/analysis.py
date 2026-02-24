@@ -15,6 +15,67 @@ T_CRITICAL_95 = {
 }
 
 
+def _betacf(a: float, b: float, x: float) -> float:
+    """Continued fraction for regularized incomplete beta function (Lentz's method)."""
+    MAXIT = 200
+    EPS = 3.0e-7
+    FPMIN = 1.0e-30
+
+    qab = a + b
+    qap = a + 1.0
+    qam = a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    if abs(d) < FPMIN:
+        d = FPMIN
+    d = 1.0 / d
+    h = d
+
+    for m in range(1, MAXIT + 1):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        if abs(d) < FPMIN:
+            d = FPMIN
+        c = 1.0 + aa / c
+        if abs(c) < FPMIN:
+            c = FPMIN
+        d = 1.0 / d
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        if abs(d) < FPMIN:
+            d = FPMIN
+        c = 1.0 + aa / c
+        if abs(c) < FPMIN:
+            c = FPMIN
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < EPS:
+            break
+    return h
+
+
+def _betai(a: float, b: float, x: float) -> float:
+    """Regularized incomplete beta function I_x(a, b).
+
+    Returns I_x(a, b) = B_x(a, b) / B(a, b), the CDF of the beta distribution.
+    Used to compute exact t-distribution p-values via:
+        p_value = _betai(df/2, 0.5, df / (df + t**2))   # two-tailed Welch's t-test
+    """
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    # Use symmetry relation for better CF convergence when x > (a+1)/(a+b+2)
+    if x > (a + 1.0) / (a + b + 2.0):
+        return 1.0 - _betai(b, a, 1.0 - x)
+    lbeta = math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
+    front = math.exp(math.log(x) * a + math.log(1.0 - x) * b - lbeta) / a
+    return front * _betacf(a, b, x)
+
+
 def _get_t_critical(df: int) -> float:
     if df <= 0:
         return float('inf')
@@ -122,13 +183,11 @@ def two_sample_ttest(sample1: List[float], sample2: List[float]) -> TTestResult:
     denom = (var1/n1)**2/(n1-1) + (var2/n2)**2/(n2-1)
     df = num / denom if denom > 0 else 1
 
-    # Approximate p-value using t-distribution
-    # Using simple approximation: |t| > t_critical means p < 0.05
+    # Exact p-value from t-distribution using regularized incomplete beta function
     t_crit = _get_t_critical(int(df))
     significant = abs(t_stat) > t_crit
 
-    # Rough p-value estimate (not precise, but sufficient for significance check)
-    p_value = 0.05 if not significant else 0.01  # Simplified
+    p_value = _betai(df / 2.0, 0.5, df / (df + t_stat ** 2))
 
     # Cohen's d effect size
     pooled_std = math.sqrt(((n1-1)*var1 + (n2-1)*var2) / (n1+n2-2))
