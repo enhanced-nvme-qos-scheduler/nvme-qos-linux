@@ -47,6 +47,10 @@ make O=~/kbuild/nvme-dev defconfig
 ./scripts/config --file ~/kbuild/nvme-dev/.config --enable NVME_QOS
 make O=~/kbuild/nvme-dev oldconfig
 
+# Optional: enable per-queue scheduler stats via debugfs (required by nvme-qos-bench)
+./scripts/config --file ~/kbuild/nvme-dev/.config --enable NVME_QOS_STATS
+make O=~/kbuild/nvme-dev oldconfig
+
 # Build the NVMe module
 make O=~/kbuild/nvme-dev M=drivers/nvme/host
 
@@ -161,8 +165,8 @@ Open a PR against `master`. Your PR description should include:
 - **`Closes #<issue>`** linking the related issue
 - **Summary** section with bullet points describing what changed and why
 - **Benchmark data** if the change touches the hot path (dispatch, completion,
-  submission). Use the benchmark tool at `tools/nvme-qos-bench/` or provide
-  `fio` results.
+  submission). See [`tools/nvme-qos-bench/README.md`](tools/nvme-qos-bench/README.md)
+  for the full benchmarking guide, or provide raw `fio` results.
 
 Example PR structure:
 ```markdown
@@ -270,6 +274,37 @@ Common mistakes caught by the disabled build:
 > (see [LSP Support](#lsp-support-clangd)) gives your editor diagnostics for
 > the QoS path, but it will **not** catch issues in the `#else` (disabled)
 > path — the dual build above is the definitive check.
+
+## CONFIG_NVME_QOS_STATS Guards
+
+`CONFIG_NVME_QOS_STATS` is a second, optional build-time flag that adds
+per-queue scheduler statistics exposed via debugfs. It depends on both
+`CONFIG_NVME_QOS` and `CONFIG_DEBUG_FS`.
+
+When enabled it adds:
+- An 11-counter `qos_stats` struct (all `atomic64_t`) inside `struct nvme_queue`
+- A debugfs directory at `/sys/kernel/debug/nvme_qos/<ctrlname>/` with
+  `stats` (read) and `stats_reset` (write) files
+- The `NQS_INC(nvmeq, field)` macro on the hot path — compiles to nothing when
+  the option is off, so production builds pay zero cost
+
+All code additions must follow the same guard pattern as `CONFIG_NVME_QOS`:
+
+```c
+#ifdef CONFIG_NVME_QOS_STATS
+	/* stats-only code */
+#endif /* CONFIG_NVME_QOS_STATS */
+```
+
+Stat increments inside `CONFIG_NVME_QOS` blocks should use the `NQS_INC()`
+macro rather than calling `atomic64_inc()` directly, so they compile away when
+`CONFIG_NVME_QOS_STATS=n`.
+
+### Benchmarking with stats
+
+The `nvme-qos-bench` tool requires `CONFIG_NVME_QOS_STATS=y` to read dispatch
+counters from debugfs. See [`tools/nvme-qos-bench/README.md`](tools/nvme-qos-bench/README.md)
+for setup and usage.
 
 ## Reporting Bugs and Requesting Changes
 
