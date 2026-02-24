@@ -1280,22 +1280,6 @@ static void nvme_qos_drain_all_queues(struct nvme_dev *dev)
 			 total);
 }
 
-/*
- * NQS_INC: increment a per-queue QoS stats counter.
- *
- * NOTE: counters only fire on the WRR-active dispatch path.  When a queue is
- * in bypass mode (qos_bypass=1) the enqueue/dispatch paths are skipped, so
- * all dispatch counters (high_dispatched, normal_dispatched, wc_high_fallback,
- * wc_normal_fallback) remain zero for that queue.  A zero dispatch count on a
- * QoS-enabled run may indicate bypass mode was active rather than a scheduler
- * failure.
- */
-#ifdef CONFIG_NVME_QOS_STATS
-#define NQS_INC(nvmeq, field) atomic64_inc(&(nvmeq)->qos_stats.field)
-#else
-#define NQS_INC(nvmeq, field) do { } while (0)
-#endif
-
 static bool nvme_qos_is_high_prio(struct request *req)
 {
 	struct nvme_ns *ns = req->q->queuedata;
