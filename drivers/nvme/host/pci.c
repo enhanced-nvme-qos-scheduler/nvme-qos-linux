@@ -29,6 +29,10 @@
 #include <linux/io-64-nonatomic-hi-lo.h>
 #include <linux/sed-opal.h>
 
+#ifdef CONFIG_NVME_QOS
+#include <linux/jump_label.h>
+#endif
+
 #include "trace.h"
 #include "nvme.h"
 
@@ -93,6 +97,12 @@ MODULE_PARM_DESC(sgl_threshold,
 
 #define NVME_PCI_MIN_QUEUE_SIZE 2
 #define NVME_PCI_MAX_QUEUE_SIZE 4095
+
+#ifdef CONFIG_NVME_QOS
+DEFINE_STATIC_KEY_FALSE(nvme_qos_active);
+static DEFINE_MUTEX(nvme_qos_sysfs_lock);
+#endif
+
 static int io_queue_depth_set(const char *val, const struct kernel_param *kp);
 static const struct kernel_param_ops io_queue_depth_ops = {
 	.set = io_queue_depth_set,
@@ -1524,7 +1534,7 @@ static void nvme_qos_kick(struct nvme_queue *nvmeq)
 {
 	unsigned long flags;
 
-	if (!nvmeq->dev->qos_enabled)
+	if (!static_branch_unlikely(&nvme_qos_active) || !nvmeq->dev->qos_enabled)
 		return;
 
 	if (READ_ONCE(nvmeq->qos_bypass))
@@ -1564,8 +1574,8 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 		return ret;
 
 #ifdef CONFIG_NVME_QOS
-	/* Bypass QoS if disabled */
-	if (unlikely(dev->qos_enabled == 0))
+	/* Bypass QoS if globally disabled or disabled for this device */
+	if (!static_branch_unlikely(&nvme_qos_active) || (dev->qos_enabled == 0))
 		goto direct_submit;
 
 	/* Low-depth bypass: skip QoS when no contention */
@@ -1673,7 +1683,8 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 	}
 
 	/* Re-check under lock to handle disable race */
-	if (unlikely(!READ_ONCE(nvmeq->dev->qos_enabled))) {
+	if (!static_branch_unlikely(&nvme_qos_active) ||
+		unlikely(!READ_ONCE(nvmeq->dev->qos_enabled))) {
 		while ((req = rq_list_pop(rqlist))) {
 			struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
 
@@ -1720,7 +1731,8 @@ static void nvme_queue_rqs(struct rq_list *rqlist)
 	while ((req = rq_list_pop(rqlist))) {
 #ifdef CONFIG_NVME_QOS
 		if (nvmeq && nvmeq != req->mq_hctx->driver_data) {
-			if (nvmeq->dev->qos_enabled &&
+			if (static_branch_unlikely(&nvme_qos_active) &&
+			nvmeq->dev->qos_enabled &&
 			    !nvme_qos_in_bypass(nvmeq))
 				nvme_qos_submit_batch(nvmeq, &submit_list);
 			else
@@ -1740,7 +1752,8 @@ static void nvme_queue_rqs(struct rq_list *rqlist)
 
 #ifdef CONFIG_NVME_QOS
 	if (nvmeq) {
-		if (nvmeq->dev->qos_enabled &&
+		if (static_branch_unlikely(&nvme_qos_active) &&
+			nvmeq->dev->qos_enabled &&
 		    !nvme_qos_in_bypass(nvmeq))
 			nvme_qos_submit_batch(nvmeq, &submit_list);
 		else
@@ -3108,16 +3121,25 @@ static ssize_t qos_enable_store(struct device *dev, struct device_attribute *att
 	if (kstrtobool(buf, &enable) < 0)
 		return -EINVAL;
 
+	mutex_lock(&nvme_qos_sysfs_lock);
+
 	/* When disabling QoS, drain pending requests first */
-	if (!enable && ndev->qos_enabled) {
+	if (enable && !ndev->qos_enabled) {
+		/* First toggle on: patches NOP to JMP */
+		static_branch_inc(&nvme_qos_active);
+		WRITE_ONCE(ndev->qos_enabled, 1);
+	} else if (!enable && ndev->qos_enabled) {
 		// Set flag first to prevent new enqueues and
 		// ensure flag visible before drain
 		WRITE_ONCE(ndev->qos_enabled, 0);
 		smp_mb();
 		nvme_qos_drain_all_queues(ndev);
-	} else {
-		WRITE_ONCE(ndev->qos_enabled, enable);
+
+		/* Last toggle off: patches JMP to NOP */
+		static_branch_dec(&nvme_qos_active);
 	}
+
+	mutex_unlock(&nvme_qos_sysfs_lock);
 
 	dev_info(dev, "NVMe QoS Scheduler: %s\n", enable ? "ENABLED" : "DISABLED");
 	return count;
@@ -4352,6 +4374,14 @@ static void nvme_shutdown(struct pci_dev *pdev)
 static void nvme_remove(struct pci_dev *pdev)
 {
 	struct nvme_dev *dev = pci_get_drvdata(pdev);
+
+#ifdef CONFIG_NVME_QOS
+	/* Clean up the static key reference if device dies while QoS is enabled */
+	if (dev->qos_enabled) {
+		WRITE_ONCE(dev->qos_enabled, 0);
+		static_branch_dec(&nvme_qos_active);
+	}
+#endif
 
 	nvme_change_ctrl_state(&dev->ctrl, NVME_CTRL_DELETING);
 	pci_set_drvdata(pdev, NULL);
