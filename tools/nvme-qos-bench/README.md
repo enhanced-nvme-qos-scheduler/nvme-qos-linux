@@ -6,7 +6,7 @@ Benchmarking tool for the Linux NVMe QoS scheduler. Measures p99 latency improve
 
 - Python 3.8+
 - fio (`apt install fio`)
-- Python packages: `pip install pyyaml jinja2 numpy scipy`
+- Python packages: `pip install pyyaml jinja2`
 - Root privileges (sysfs access and direct I/O)
 - A dedicated NVMe partition for testing — **data will be overwritten**
 - Kernel built with `CONFIG_NVME_QOS=y` and `CONFIG_NVME_QOS_STATS=y`
