@@ -2185,11 +2185,6 @@ static void nvme_free_queues(struct nvme_dev *dev, int lowest)
 			nvme_qos_cleanup_queue(nvmeq);
 	}
 #endif
-
-	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--) {
-		dev->ctrl.queue_count--;
-		nvme_free_queue(&dev->queues[i]);
-	}
 }
 
 static void nvme_suspend_queue(struct nvme_dev *dev, unsigned int qid)
@@ -3653,17 +3648,24 @@ static void nvme_reset_work(struct work_struct *work)
 	 * If we're called to reset a live controller first shut it down before
 	 * moving on.
 	 */
-	if (dev->ctrl.ctrl_config & NVME_CC_ENABLE) {
-
 #ifdef CONFIG_NVME_QOS
+
+	if (dev->ctrl.ctrl_config & NVME_CC_ENABLE) {
 
 		/* Fail any queued requests before disable to avoid blocking shutdown on
 		 * pending requests that won't be completed due to reset
 		 */
 		nvme_qos_fail_all_queued_requests(dev);
-#endif
 		nvme_dev_disable(dev, false);
 	}
+
+#else
+
+	if (dev->ctrl.ctrl_config & NVME_CC_ENABLE) {
+		nvme_dev_disable(dev, false);
+	}
+
+#endif
 	nvme_sync_queues(&dev->ctrl);
 
 	mutex_lock(&dev->shutdown_lock);
@@ -4094,7 +4096,7 @@ out_put_ctrl:
 static void nvme_reset_prepare(struct pci_dev *pdev)
 {
 	struct nvme_dev *dev = pci_get_drvdata(pdev);
-
+#ifdef CONFIG_NVME_QOS
 	/*
 	 * We don't need to check the return value from waiting for the reset
 	 * Fail any queued-but-not-submitted requests before disable
