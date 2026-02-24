@@ -5,6 +5,9 @@ import sys
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
 
+HIGH_PRIO_JOB_NAMES = frozenset({"high-prio-reads"})
+NORMAL_PRIO_JOB_NAMES = frozenset({"normal-prio-writes"})
+
 
 @dataclass
 class JobMetrics:
@@ -115,24 +118,24 @@ def extract_fio_metrics(fio_json: Dict[str, Any]) -> FioMetrics:
 
     jobs = [extract_job_metrics(j) for j in jobs_data]
 
-    # Identify high-priority and normal-priority jobs by name
-    # Job names from templates:
-    #   - high-prio-reads     → high priority
-    #   - normal-prio-writes  → normal priority
-    #   - cpu-overhead-test   → unclassified (treat as normal/neutral)
+    # Identify high-priority and normal-priority jobs by name.
+    # Canonical names are defined in HIGH_PRIO_JOB_NAMES / NORMAL_PRIO_JOB_NAMES above.
+    # Update those sets if fio template section names change.
     high_prio = None
     normal_prio = None
     high_prio_jobs = []
     normal_prio_jobs = []
 
     for jm in jobs:
-        name_lower = jm.job_name.lower()
-        if name_lower.startswith("high") or ("high" in name_lower and "normal" not in name_lower):
+        if jm.job_name in HIGH_PRIO_JOB_NAMES:
             high_prio_jobs.append(jm)
-        elif name_lower.startswith("normal") or "bulk" in name_lower:
+        elif jm.job_name in NORMAL_PRIO_JOB_NAMES:
             normal_prio_jobs.append(jm)
         else:
-            print(f"Warning: Job '{jm.job_name}' does not match high/normal priority patterns, skipping classification", file=sys.stderr)
+            raise ValueError(
+                f"Unknown job name '{jm.job_name}' — not in HIGH_PRIO_JOB_NAMES or "
+                f"NORMAL_PRIO_JOB_NAMES. Update the sets in metrics.py if templates changed."
+            )
 
     if high_prio_jobs:
         high_prio = _aggregate_jobs(high_prio_jobs, "high-prio-aggregate")

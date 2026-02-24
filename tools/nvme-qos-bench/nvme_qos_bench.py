@@ -1510,7 +1510,7 @@ def _load_benchmark_config(args, device):
     """
     if not args.condition:
         print(colored(
-            "Error: a condition profile is required. Use -C <ID> (e.g., -C D).\n"
+            "Error: a condition profile is required. Use -C <ID> (e.g., -C C).\n"
             "  Run './nvme_qos_bench.py conditions' to list available conditions.",
             "red"
         ), file=sys.stderr)
@@ -2499,19 +2499,19 @@ def main():
         help="Run benchmark suite",
         epilog="""Examples:
   Device-saturation contention condition (~30 min):
-    ./nvme_qos_bench.py run -d nvme0n1p7 -C D
+    ./nvme_qos_bench.py run -d nvme0n1 -C C
 
   Weight sweep for proportionality validation:
-    ./nvme_qos_bench.py run -d nvme0n1p7 -C I
+    ./nvme_qos_bench.py run -d nvme0n1 -C E
 
   Override depths and weights for a condition:
-    ./nvme_qos_bench.py run -d nvme0n1p7 -C D --depths 32 64 --weights 4 9 19
+    ./nvme_qos_bench.py run -d nvme0n1 -C C --depths 32 64 --weights 4 9 19
 
   List all conditions:
     ./nvme_qos_bench.py conditions
 """
     )
-    run_parser.add_argument("-d", "--device", metavar="DEV", help="NVMe device (e.g., nvme0n1p7)")
+    run_parser.add_argument("-d", "--device", metavar="DEV", help="NVMe device (e.g., nvme0n1)")
     run_parser.add_argument("--reset-device", action="store_true",
                            help="Clear saved device preference")
     run_parser.add_argument("-o", "--output", metavar="DIR", default="./.nvme-qos-results",
@@ -2537,7 +2537,7 @@ def main():
     run_parser.add_argument("--compare", action="store_true",
                            help="Generate comparison report")
     run_parser.add_argument("-c", "-C", "--condition", metavar="ID",
-                           help="Load condition profile (A, C, D, G, I). Auto-scales to hardware.")
+                           help="Load condition profile (A, B, C, D, E). Auto-scales to hardware.")
 
     # Conditions command
     cond_parser = subparsers.add_parser(
@@ -2551,11 +2551,11 @@ def main():
     ./nvme_qos_bench.py conditions A
 
   Show resolved config for device:
-    ./nvme_qos_bench.py conditions A -d nvme0n1p7
+    ./nvme_qos_bench.py conditions A -d nvme0n1
 """
     )
     cond_parser.add_argument("condition_id", nargs="?", default=None, metavar="ID",
-        help="Show details for a specific condition (A, C, D, G, I)")
+        help="Show details for a specific condition (A, B, C, D, E)")
     cond_parser.add_argument("-d", "--device", metavar="DEV",
         help="Show resolved config for this device's HW queue count")
 
@@ -2565,10 +2565,10 @@ def main():
         help="Quick functional validation (~2-3 min)",
         epilog="""Example:
   Run validation on device:
-    ./nvme_qos_bench.py validate -d nvme0n1p7
+    ./nvme_qos_bench.py validate -d nvme0n1
 """
     )
-    validate_parser.add_argument("-d", "--device", metavar="DEV", help="NVMe device (e.g., nvme0n1p7)")
+    validate_parser.add_argument("-d", "--device", metavar="DEV", help="NVMe device (e.g., nvme0n1)")
     validate_parser.add_argument("--reset-device", action="store_true",
                                  help="Clear saved device preference")
     validate_parser.add_argument("-o", "--output", metavar="DIR", default="./.nvme-qos-results",

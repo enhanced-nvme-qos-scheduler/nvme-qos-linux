@@ -142,7 +142,7 @@ _register(ConditionProfile(
 ))
 
 _register(ConditionProfile(
-    id="C",
+    id="B",
     name="Few queues, high density",
     description="Pack many jobs onto 2 queues -- maximum per-queue contention",
     mechanism="WRR arbitration",
@@ -157,7 +157,7 @@ _register(ConditionProfile(
 ))
 
 _register(ConditionProfile(
-    id="D",
+    id="C",
     name="Device-sat, high contention",
     description="Half-queue saturation with 2:8 job ratio -- target operating condition",
     mechanism="Classification + WRR",
@@ -171,7 +171,7 @@ _register(ConditionProfile(
 ))
 
 _register(ConditionProfile(
-    id="G",
+    id="D",
     name="Majority high-prio",
     description="Many high-prio jobs vs few normal -- tests credit exhaustion",
     mechanism="WRR credit exhaustion",
@@ -186,7 +186,7 @@ _register(ConditionProfile(
 ))
 
 _register(ConditionProfile(
-    id="I",
+    id="E",
     name="Weight sweep",
     description="Sweep QoS weights 1-99 -- validates proportional fairness",
     mechanism="WRR fairness",

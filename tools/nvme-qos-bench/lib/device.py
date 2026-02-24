@@ -123,7 +123,7 @@ class NVMeDevice:
     """NVMe device with QoS control interface."""
 
     def __init__(self, name: str):
-        """Initialize with device name (e.g., 'nvme0n1' or 'nvme0n1p7')."""
+        """Initialize with device name (e.g., 'nvme0n1' or 'nvme0n1')."""
         self.name = name
         self.path = f"/dev/{name}"
 
