@@ -1282,8 +1282,6 @@ static void nvme_qos_drain_all_queues(struct nvme_dev *dev)
 			 total);
 }
 
-#define NVME_QOS_MAX_BATCH 4
-
 static bool nvme_qos_is_high_prio(struct request *req)
 {
 	struct nvme_ns *ns = req->q->queuedata;
@@ -4236,7 +4234,7 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 #ifdef CONFIG_NVME_QOS
 	dev->qos_enabled = 0;
 	dev->qos_high_weight = 9;
-	dev->qos_batch_limit = NVME_QOS_MAX_BATCH;
+	dev->qos_batch_limit = 4;
 	dev->qos_bypass_enter_threshold = 1;
 	dev->qos_bypass_exit_threshold = 2;
 	dev->qos_bypass_enter_ms = 5;
