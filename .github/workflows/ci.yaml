@@ -93,12 +93,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: kbuild
-          key: kbuild-${{ runner.os }}-${{ hashFiles('Makefile') }}
+          key: kbuild-allmodconfig-${{ runner.os }}-${{ hashFiles('Makefile') }}
 
       - name: Prepare kernel build tree
         if: steps.cache-kbuild.outputs.cache-hit != 'true'
         run: |
-          make O=kbuild defconfig
+          make O=kbuild allmodconfig
           make O=kbuild modules_prepare -j$(nproc)
 
       - name: Configure NVME_QOS=${{ matrix.nvme_qos }}
