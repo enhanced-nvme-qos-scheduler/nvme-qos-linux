@@ -4377,10 +4377,12 @@ static void nvme_remove(struct pci_dev *pdev)
 
 #ifdef CONFIG_NVME_QOS
 	/* Clean up the static key reference if device dies while QoS is enabled */
+	mutex_lock(&nvme_qos_sysfs_lock);
 	if (dev->qos_enabled) {
 		WRITE_ONCE(dev->qos_enabled, 0);
 		static_branch_dec(&nvme_qos_active);
 	}
+	mutex_unlock(&nvme_qos_sysfs_lock);
 #endif
 
 	nvme_change_ctrl_state(&dev->ctrl, NVME_CTRL_DELETING);
