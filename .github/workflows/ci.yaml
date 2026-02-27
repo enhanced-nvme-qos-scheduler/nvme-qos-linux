@@ -71,3 +71,48 @@ jobs:
             echo "Initial push, skipping diff check"
           fi
 
+  build:
+    name: build (NVME_QOS=${{ matrix.nvme_qos }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        nvme_qos: ['y', 'n']
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: sudo apt-get install -y build-essential libelf-dev flex bison bc
+
+      - name: Cache kernel build tree
+        id: cache-kbuild
+        uses: actions/cache@v4
+        with:
+          path: kbuild
+          key: kbuild-${{ runner.os }}-${{ hashFiles('Makefile') }}
+
+      - name: Prepare kernel build tree
+        if: steps.cache-kbuild.outputs.cache-hit != 'true'
+        run: |
+          make O=kbuild defconfig
+          make O=kbuild modules_prepare -j$(nproc)
+
+      - name: Configure NVME_QOS=${{ matrix.nvme_qos }}
+        run: |
+          ./scripts/config --file kbuild/.config --module BLK_DEV_NVME
+          if [ "${{ matrix.nvme_qos }}" = "y" ]; then
+            ./scripts/config --file kbuild/.config --enable NVME_QOS
+          else
+            ./scripts/config --file kbuild/.config --disable NVME_QOS
+          fi
+          make O=kbuild olddefconfig
+
+      - name: Build NVMe module
+        run: |
+          make O=kbuild M=drivers/nvme/host \
+            KCFLAGS="-Wunused-variable -Werror" \
+            -j$(nproc)
