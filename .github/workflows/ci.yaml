@@ -120,11 +120,12 @@ jobs:
 
       - name: Verify build output
         run: |
-          ko=kbuild/drivers/nvme/host/nvme.ko
-          if [ ! -f "$ko" ]; then
-            echo "::error::$ko not found after build"
+          ko=$(find . -name 'nvme.ko' -not -path './.git/*' | head -1)
+          if [ -z "$ko" ]; then
+            echo "::error::nvme.ko not found after build"
             exit 1
           fi
+          echo "Found: $ko"
 
           if [ "${{ matrix.nvme_qos }}" = "y" ]; then
             nm "$ko" | grep -q nvme_qos || {
