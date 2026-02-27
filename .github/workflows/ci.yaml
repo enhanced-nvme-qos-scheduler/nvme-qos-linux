@@ -110,6 +110,7 @@ jobs:
             ./scripts/config --file kbuild/.config --disable NVME_QOS
           fi
           make O=kbuild olddefconfig
+          make O=kbuild syncconfig
 
       - name: Build NVMe module
         run: |
