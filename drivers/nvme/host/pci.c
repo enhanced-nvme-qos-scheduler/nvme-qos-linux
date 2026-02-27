@@ -4,6 +4,7 @@
  * Copyright (c) 2011-2014, Intel Corporation.
  */
 
+#include "asm-generic/rwonce.h"
 #include <linux/acpi.h>
 #include <linux/async.h>
 #include <linux/blkdev.h>
@@ -3189,7 +3190,7 @@ static ssize_t qos_high_weight_store(struct device *dev, struct device_attribute
 	if (kstrtouint(buf, 10, &val) < 0 || val == 0)
 		return -EINVAL;
 
-	ndev->qos_high_weight = val;
+	WRITE_ONCE(ndev->qos_high_weight, val);
 	dev_info(dev, "NVMe QoS: High Priority Weight set to %u\n", val);
 	return count;
 }
@@ -3211,7 +3212,7 @@ static ssize_t qos_normal_weight_store(struct device *dev, struct device_attribu
 	if (kstrtouint(buf, 10, &val) < 0 || val == 0)
 		return -EINVAL;
 
-	ndev->qos_normal_weight = val;
+	WRITE_ONCE(ndev->qos_normal_weight, val);
 	dev_info(dev, "NVMe QoS: Normal Priority Weight set to %u\n", val);
 	return count;
 }
