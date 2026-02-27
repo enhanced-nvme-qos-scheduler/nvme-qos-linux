@@ -116,3 +116,23 @@ jobs:
           make O=kbuild M=drivers/nvme/host \
             KCFLAGS="-Wunused-variable -Werror" \
             -j$(nproc)
+
+      - name: Verify build output
+        run: |
+          ko=kbuild/drivers/nvme/host/nvme.ko
+          if [ ! -f "$ko" ]; then
+            echo "::error::$ko not found after build"
+            exit 1
+          fi
+
+          if [ "${{ matrix.nvme_qos }}" = "y" ]; then
+            nm "$ko" | grep -q nvme_qos || {
+              echo "::error::QoS symbols missing from module built with NVME_QOS=y"
+              exit 1
+            }
+          else
+            if nm "$ko" | grep -q nvme_qos; then
+              echo "::error::QoS symbols present in module built with NVME_QOS=n"
+              exit 1
+            fi
+          fi
