@@ -1282,7 +1282,7 @@ static void nvme_qos_fail_queued_requests(struct nvme_queue *nvmeq)
 	unsigned long flags;
 
 	/* Process high priority list and low priority list */
-	sin_lock_irqsave(&nvmeq->sq_lock, flags);
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
 	list_splice_init(&nvmeq->high_prio_list, &local);
 	list_splice_init(&nvmeq->normal_prio_list, &local);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
