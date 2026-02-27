@@ -115,6 +115,7 @@ jobs:
         run: |
           make O=kbuild M=drivers/nvme/host \
             KCFLAGS="-Wunused-variable -Werror" \
+            KBUILD_MODPOST_WARN=1 \
             -j$(nproc)
 
       - name: Verify build output
