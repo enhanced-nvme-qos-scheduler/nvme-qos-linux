@@ -1683,8 +1683,7 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 	}
 
 	/* Re-check under lock to handle disable race */
-	if (!static_branch_unlikely(&nvme_qos_active) ||
-		unlikely(!READ_ONCE(nvmeq->dev->qos_enabled))) {
+	if (unlikely(!READ_ONCE(nvmeq->dev->qos_enabled))) {
 		while ((req = rq_list_pop(rqlist))) {
 			struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
 
@@ -1732,8 +1731,8 @@ static void nvme_queue_rqs(struct rq_list *rqlist)
 #ifdef CONFIG_NVME_QOS
 		if (nvmeq && nvmeq != req->mq_hctx->driver_data) {
 			if (static_branch_unlikely(&nvme_qos_active) &&
-			nvmeq->dev->qos_enabled &&
-			    !nvme_qos_in_bypass(nvmeq))
+				nvmeq->dev->qos_enabled &&
+				!nvme_qos_in_bypass(nvmeq))
 				nvme_qos_submit_batch(nvmeq, &submit_list);
 			else
 				nvme_submit_cmds(nvmeq, &submit_list);
