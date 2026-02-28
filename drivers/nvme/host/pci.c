@@ -133,6 +133,40 @@ static bool noacpi;
 module_param(noacpi, bool, 0444);
 MODULE_PARM_DESC(noacpi, "disable acpi bios quirks");
 
+#ifdef CONFIG_NVME_QOS
+static bool qos_enable;
+module_param(qos_enable, bool, 0444);
+MODULE_PARM_DESC(qos_enable, "Enable NVMe QoS Scheduler by default (default: false)");
+
+static unsigned int qos_weight = 7;
+module_param(qos_weight, uint, 0444);
+MODULE_PARM_DESC(qos_weight, "Default high priority weight (default: 7)");
+
+static unsigned int qos_batch_limit = 4;
+module_param(qos_batch_limit, uint, 0444);
+MODULE_PARM_DESC(qos_batch_limit, "Default QoS batch dispatch limit (default: 4)");
+
+static unsigned int qos_burst_window = HZ / 10;
+module_param(qos_burst_window, uint, 0444);
+MODULE_PARM_DESC(qos_burst_window, "Default burst window cap (default: HZ / 10)");
+
+static unsigned int qos_bypass_enter_thresh = 1;
+module_param_named(qos_bypass_enter_threshold, qos_bypass_enter_thresh, uint, 0444);
+MODULE_PARM_DESC(qos_bypass_enter_threshold, "Default in-flight threshold to enter bypass (default: 1)");
+
+static unsigned int qos_bypass_exit_thresh = 2;
+module_param_named(qos_bypass_exit_threshold, qos_bypass_exit_thresh, uint, 0444);
+MODULE_PARM_DESC(qos_bypass_exit_threshold, "Default in-flight threshold to exit bypass (default: 2)");
+
+static unsigned int qos_bypass_enter_ms = 5;
+module_param(qos_bypass_enter_ms, uint, 0444);
+MODULE_PARM_DESC(qos_bypass_enter_ms, "Default ms to wait before entering bypass (default: 5)");
+
+static unsigned int qos_bypass_exit_ms;
+module_param(qos_bypass_exit_ms, uint, 0444);
+MODULE_PARM_DESC(qos_bypass_exit_ms, "Default ms to wait before exiting bypass (default: 0)");
+#endif
+
 struct nvme_dev;
 struct nvme_queue;
 
@@ -4232,14 +4266,14 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 	dev->ctrl.max_integrity_segments = 1;
 
 #ifdef CONFIG_NVME_QOS
-	dev->qos_enabled = 0;
-	dev->qos_high_weight = 9;
-	dev->qos_batch_limit = 4;
-	dev->qos_bypass_enter_threshold = 1;
-	dev->qos_bypass_exit_threshold = 2;
-	dev->qos_bypass_enter_ms = 5;
-	dev->qos_bypass_exit_ms = 0;
-	dev->qos_burst_window = HZ / 10;
+	dev->qos_enabled = qos_enable;
+	dev->qos_high_weight = qos_weight;
+	dev->qos_batch_limit = qos_batch_limit;
+	dev->qos_bypass_enter_threshold = qos_bypass_enter_thresh;
+	dev->qos_bypass_exit_threshold = qos_bypass_exit_thresh;
+	dev->qos_bypass_enter_ms = qos_bypass_enter_ms;
+	dev->qos_bypass_exit_ms = qos_bypass_exit_ms;
+	dev->qos_burst_window = qos_burst_window;
 #endif
 
 	return dev;
