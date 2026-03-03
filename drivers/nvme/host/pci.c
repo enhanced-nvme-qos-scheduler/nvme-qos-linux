@@ -2160,20 +2160,6 @@ disable:
 
 static void nvme_free_queue(struct nvme_queue *nvmeq)
 {
-#ifdef CONFIG_NVME_QOS
-	unsigned long flags;
-
-	/*
-	 * If QoS is enabled, queued-but-not-submitted requests must be drained
-	 * (requeued/failed) before freeing queue memory.  At this point the
-	 * lists should be empty.
-	 */
-	spin_lock_irqsave(&nvmeq->sq_lock, flags);
-	WARN_ON(!list_empty(&nvmeq->high_prio_list));
-	WARN_ON(!list_empty(&nvmeq->normal_prio_list));
-	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
-#endif
-
 	dma_free_coherent(nvmeq->dev->dev, CQ_SIZE(nvmeq),
 				(void *)nvmeq->cqes, nvmeq->cq_dma_addr);
 	if (!nvmeq->sq_cmds)
@@ -2234,11 +2220,6 @@ static void nvme_suspend_queue(struct nvme_dev *dev, unsigned int qid)
 #endif
 
 	nvmeq->dev->online_queues--;
-
-	/* Checks NVMEQ_POLLED status in in nvmeq->flags,
-	 * Checking NVMEQ_ENABLED is not enough because the queue can be disabled but still in polled mode, and we don't want to free irq in that case.
-	 * If the queue is in polled mode, the interrupt is not requested, so we don't need to free it.
-	 */
 	if (!test_and_clear_bit(NVMEQ_POLLED, &nvmeq->flags))
 		pci_free_irq(to_pci_dev(dev->dev), nvmeq->cq_vector, nvmeq);
 }
