@@ -2457,6 +2457,8 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
 	nvmeq->high_tokens = dev->qos_high_weight;
 	nvmeq->normal_tokens = dev->qos_normal_weight;
+	nvmeq->high_credits = 0;
+	nvmeq->normal_credits = 0;
 	nvmeq->last_refill_jiffies = jiffies;
 	atomic_set(&nvmeq->in_flight, 0);
 	nvmeq->qos_bypass = 0;
@@ -2517,6 +2519,8 @@ static void nvme_init_queue(struct nvme_queue *nvmeq, u16 qid)
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
 	nvmeq->high_tokens = dev->qos_high_weight;
 	nvmeq->normal_tokens = dev->qos_normal_weight;
+	nvmeq->high_credits = 0;
+	nvmeq->normal_credits = 0;
 	nvmeq->last_refill_jiffies = jiffies;
 	atomic_set(&nvmeq->in_flight, 0);
 	nvmeq->qos_bypass = 0;
