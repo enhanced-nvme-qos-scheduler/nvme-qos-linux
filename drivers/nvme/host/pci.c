@@ -2234,6 +2234,11 @@ static void nvme_suspend_queue(struct nvme_dev *dev, unsigned int qid)
 #endif
 
 	nvmeq->dev->online_queues--;
+
+	/* Checks NVMEQ_POLLED status in in nvmeq->flags,
+	 * Checking NVMEQ_ENABLED is not enough because the queue can be disabled but still in polled mode, and we don't want to free irq in that case.
+	 * If the queue is in polled mode, the interrupt is not requested, so we don't need to free it.
+	 */
 	if (!test_and_clear_bit(NVMEQ_POLLED, &nvmeq->flags))
 		pci_free_irq(to_pci_dev(dev->dev), nvmeq->cq_vector, nvmeq);
 }
