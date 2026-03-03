@@ -1291,7 +1291,7 @@ static void nvme_qos_fail_queued_requests(struct nvme_queue *nvmeq)
 		req = list_first_entry(&local, struct request, queuelist);
 		list_del_init(&req->queuelist);
 		nvme_req(req)->status = NVME_SC_HOST_ABORTED_CMD;
-		nvme_req(req)->flags |= NVME_REQ_COMPLETE;
+		nvme_req(req)->flags |= NVME_REQ_CANCELLED;
 		blk_mq_complete_request(req);
 	}
 }
@@ -2160,6 +2160,20 @@ disable:
 
 static void nvme_free_queue(struct nvme_queue *nvmeq)
 {
+#ifdef CONFIG_NVME_QOS
+	unsigned long flags;
+
+	/*
+	 * If QoS is enabled, queued-but-not-submitted requests must be drained
+	 * (requeued/failed) before freeing queue memory.  At this point the
+	 * lists should be empty.
+	 */
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
+	WARN_ON(!list_empty(&nvmeq->high_prio_list));
+	WARN_ON(!list_empty(&nvmeq->normal_prio_list));
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+#endif
+
 	dma_free_coherent(nvmeq->dev->dev, CQ_SIZE(nvmeq),
 				(void *)nvmeq->cqes, nvmeq->cq_dma_addr);
 	if (!nvmeq->sq_cmds)
@@ -2178,13 +2192,22 @@ static void nvme_free_queues(struct nvme_dev *dev, int lowest)
 {
 	int i;
 
-#ifdef CONFIG_NVME_QOS
 	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--) {
 		struct nvme_queue *nvmeq = &dev->queues[i];
+
+#ifdef CONFIG_NVME_QOS
+		/*
+		 * Requests queued in the QoS lists haven't been submitted to HW
+		 * yet, so they won't be handled by nvme_cancel_request().  Fail
+		 * them explicitly before freeing queue memory.
+		 */
 		if (nvmeq->sq_cmds)
-			nvme_qos_cleanup_queue(nvmeq);
-	}
+			nvme_qos_fail_queued_requests(nvmeq);
 #endif
+
+		dev->ctrl.queue_count--;
+		nvme_free_queue(nvmeq);
+	}
 }
 
 static void nvme_suspend_queue(struct nvme_dev *dev, unsigned int qid)
@@ -2197,8 +2220,13 @@ static void nvme_suspend_queue(struct nvme_dev *dev, unsigned int qid)
 	/* ensure that nvme_queue_rq() sees NVMEQ_ENABLED cleared */
 	mb();
 
-#ifdef CONFIG_NVME_QOS
+	/*
+	 * Quiesce admin queue before completing any QoS-queued requests from it.
+	 */
+	if (!nvmeq->qid && nvmeq->dev->ctrl.admin_q)
+		nvme_quiesce_admin_queue(&nvmeq->dev->ctrl);
 
+#ifdef CONFIG_NVME_QOS
 	/* Fail queued but not submitted requests before
 	 * suspending to avoid stalling on a frozen queue
 	 */
@@ -2206,8 +2234,6 @@ static void nvme_suspend_queue(struct nvme_dev *dev, unsigned int qid)
 #endif
 
 	nvmeq->dev->online_queues--;
-	if (!nvmeq->qid && nvmeq->dev->ctrl.admin_q)
-		nvme_quiesce_admin_queue(&nvmeq->dev->ctrl);
 	if (!test_and_clear_bit(NVMEQ_POLLED, &nvmeq->flags))
 		pci_free_irq(to_pci_dev(dev->dev), nvmeq->cq_vector, nvmeq);
 }
