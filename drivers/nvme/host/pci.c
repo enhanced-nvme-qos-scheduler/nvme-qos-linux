@@ -323,6 +323,10 @@ struct nvme_iod {
 	unsigned int meta_total_len;
 	struct dma_iova_state meta_dma_state;
 	struct nvme_sgl_desc *meta_descriptor;
+
+#ifdef CONFIG_NVME_QOS
+	struct list_head qos_node;
+#endif
 };
 
 static inline unsigned int nvme_dbbuf_size(struct nvme_dev *dev)
@@ -542,6 +546,10 @@ static int nvme_pci_init_request(struct blk_mq_tag_set *set,
 		unsigned int numa_node)
 {
 	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
+
+#ifdef CONFIG_NVME_QOS
+	INIT_LIST_HEAD(&iod->qos_node);
+#endif
 
 	nvme_req(req)->ctrl = set->driver_data;
 	nvme_req(req)->cmd = &iod->cmd;
@@ -1236,24 +1244,21 @@ out_free_cmd:
  */
 static int nvme_qos_drain_queue_locked(struct nvme_queue *nvmeq)
 {
-	struct request *req;
 	struct nvme_iod *iod;
 	int submitted = 0;
 
 	while (!list_empty(&nvmeq->high_prio_list)) {
-		req = list_first_entry(&nvmeq->high_prio_list,
-				       struct request, queuelist);
-		list_del_init(&req->queuelist);
-		iod = blk_mq_rq_to_pdu(req);
+		iod = list_first_entry(&nvmeq->high_prio_list,
+				       struct nvme_iod, qos_node);
+		list_del_init(&iod->qos_node);
 		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
 		submitted++;
 	}
 
 	while (!list_empty(&nvmeq->normal_prio_list)) {
-		req = list_first_entry(&nvmeq->normal_prio_list,
-				       struct request, queuelist);
-		list_del_init(&req->queuelist);
-		iod = blk_mq_rq_to_pdu(req);
+		iod = list_first_entry(&nvmeq->normal_prio_list,
+				       struct nvme_iod, qos_node);
+		list_del_init(&iod->qos_node);
 		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
 		submitted++;
 	}
@@ -1358,9 +1363,9 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
  * This function tracks tokens for WRR and determines priority status based
  * on the source list to avoid redundant bio-level priority checks.
  */
-static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_high)
+static struct nvme_iod *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_high)
 {
-	struct request *req = NULL;
+	struct nvme_iod *iod = NULL;
 	bool high_pending = !list_empty(&nvmeq->high_prio_list);
 	bool normal_pending = !list_empty(&nvmeq->normal_prio_list);
 
@@ -1368,22 +1373,22 @@ static struct request *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_h
 
 	if (high_pending) {
 		if (nvmeq->high_tokens > 0 || !normal_pending) {
-			req = list_first_entry(&nvmeq->high_prio_list, struct request, queuelist);
-			list_del_init(&req->queuelist);
+			iod = list_first_entry(&nvmeq->high_prio_list, struct nvme_iod, qos_node);
+			list_del_init(&iod->qos_node);
 			if (nvmeq->high_tokens > 0)
 				nvmeq->high_tokens--;
 			*is_high = true;
-			return req;
+			return iod;
 		}
 	}
 
 	if (normal_pending) {
-		req = list_first_entry(&nvmeq->normal_prio_list, struct request, queuelist);
-		list_del_init(&req->queuelist);
+		iod = list_first_entry(&nvmeq->normal_prio_list, struct nvme_iod, qos_node);
+		list_del_init(&iod->qos_node);
 		if (nvmeq->normal_tokens > 0)
 			nvmeq->normal_tokens--;
 		*is_high = false;
-		return req;
+		return iod;
 	}
 
 	return NULL;
@@ -1460,21 +1465,19 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 
 	while (submitted < nvmeq->dev->qos_batch_limit) {
 		unsigned int in_flight = atomic_read(&nvmeq->in_flight);
-		struct request *req;
 		struct nvme_iod *iod;
 		bool is_high_prio = false;
 
 		if (in_flight >= depth)
 			break;
 
-		req = nvme_qos_dequeue_wrr(nvmeq, &is_high_prio);
-		if (!req)
+		iod = nvme_qos_dequeue_wrr(nvmeq, &is_high_prio);
+		if (!iod)
 			break;
 
 		if (is_high_prio)
 			high_prio_submitted = true;
 
-		iod = blk_mq_rq_to_pdu(req);
 		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
 		submitted++;
 	}
@@ -1610,11 +1613,11 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 		return BLK_STS_OK;
 	}
 
-	/* Classify and enqueue */
+	/* Classify and Enqueue */
 	if (nvme_qos_is_high_prio(req))
-		list_add_tail(&req->queuelist, &nvmeq->high_prio_list);
+		list_add_tail(&iod->qos_node, &nvmeq->high_prio_list);
 	else
-		list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
+		list_add_tail(&iod->qos_node, &nvmeq->normal_prio_list);
 
 	nvme_qos_dispatch(nvmeq, bd->last);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
@@ -1707,10 +1710,11 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 	}
 
 	while ((req = rq_list_pop(rqlist))) {
+		struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
 		if (nvme_qos_is_high_prio(req))
-			list_add_tail(&req->queuelist, &nvmeq->high_prio_list);
+			list_add_tail(&iod->qos_node, &nvmeq->high_prio_list);
 		else
-			list_add_tail(&req->queuelist, &nvmeq->normal_prio_list);
+			list_add_tail(&iod->qos_node, &nvmeq->normal_prio_list);
 	}
 
 	nvme_qos_dispatch(nvmeq, true);
@@ -1787,6 +1791,20 @@ static __always_inline void nvme_pci_unmap_rq(struct request *req)
 
 static void nvme_pci_complete_rq(struct request *req)
 {
+#ifdef CONFIG_NVME_QOS
+	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
+
+	if (unlikely(!list_empty_careful(&iod->qos_node))) {
+		struct nvme_queue *nvmeq = req->mq_hctx->driver_data;
+		unsigned long flags;
+
+		spin_lock_irqsave(&nvmeq->sq_lock, flags);
+		/* Re-check under the lock to prevent races */
+		if (!list_empty(&iod->qos_node))
+			list_del_init(&iod->qos_node);
+		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+	}
+#endif
 	nvme_pci_unmap_rq(req);
 	nvme_complete_rq(req);
 }
