@@ -89,7 +89,7 @@ ALLOWED_PATHS=(
 	'^scripts/lint\.sh$'
 	'^scripts/install-hooks\.sh$'
 	'^scripts/pre-commit$'
-	'^scripts/nvme-qos'
+	'(^|/)nvme-qos'
 )
 
 function check_modified_paths() {
