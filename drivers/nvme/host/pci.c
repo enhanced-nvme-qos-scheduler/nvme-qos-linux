@@ -145,7 +145,8 @@ MODULE_PARM_DESC(noacpi, "disable acpi bios quirks");
 
 #ifdef CONFIG_NVME_QOS
 
-#define NVME_QOS_DFLT_WEIGHT		7
+#define NVME_QOS_DFLT_HIGH_WEIGHT	7
+#define NVME_QOS_DFLT_NORMAL_WEIGHT	3
 #define NVME_QOS_DFLT_BATCH_LIMIT	4
 #define NVME_QOS_DFLT_BURST_WINDOW	(HZ / 10)
 #define NVME_QOS_DFLT_BYPASS_ENTER	1
@@ -157,9 +158,13 @@ static bool qos_enable;
 module_param(qos_enable, bool, 0444);
 MODULE_PARM_DESC(qos_enable, "Enable NVMe QoS Scheduler by default (default: false)");
 
-static unsigned int qos_weight = NVME_QOS_DFLT_WEIGHT;
-module_param(qos_weight, uint, 0444);
+static unsigned int qos_high_weight = NVME_QOS_DFLT_HIGH_WEIGHT;
+module_param(qos_high_weight, uint, 0444);
 MODULE_PARM_DESC(qos_weight, "Default high priority weight (default: 7)");
+
+static unsigned int qos_normal_weight = NVME_QOS_DFLT_NORMAL_WEIGHT;
+module_param(qos_normal_weight, uint, 0444);
+MODULE_PARM_DESC(qos_normal_weight, "Default normal priority weight (default: 3)");
 
 static unsigned int qos_batch_limit = NVME_QOS_DFLT_BATCH_LIMIT;
 module_param(qos_batch_limit, uint, 0444);
@@ -4412,7 +4417,8 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 
 #ifdef CONFIG_NVME_QOS
 	dev->qos_enabled = qos_enable;
-	dev->qos_high_weight = qos_weight;
+	dev->qos_high_weight = qos_high_weight;
+	dev->qos_normal_weight = qos_normal_weight;
 	dev->qos_batch_limit = qos_batch_limit;
 	dev->qos_bypass_enter_threshold = qos_bypass_enter_thresh;
 	dev->qos_bypass_exit_threshold = qos_bypass_exit_thresh;
@@ -5012,10 +5018,16 @@ static int __init nvme_init(void)
 	}
 
 	/* Prevent zero-value configurations that would break scheduling */
-	if (!qos_weight) {
+	if (!qos_high_weight) {
 		pr_warn("nvme: QoS weight cannot be 0. Falling back to default (%u).\n",
-			NVME_QOS_DFLT_WEIGHT);
-		qos_weight = NVME_QOS_DFLT_WEIGHT;
+			NVME_QOS_DFLT_HIGH_WEIGHT);
+		qos_high_weight = NVME_QOS_DFLT_HIGH_WEIGHT;
+	}
+
+	if (!qos_normal_weight) {
+		pr_warn("nvme: QoS normal weight cannot be 0. Falling back to default (%u).\n",
+			NVME_QOS_DFLT_NORMAL_WEIGHT);
+		qos_normal_weight = NVME_QOS_DFLT_NORMAL_WEIGHT;
 	}
 
 	if (!qos_batch_limit) {
