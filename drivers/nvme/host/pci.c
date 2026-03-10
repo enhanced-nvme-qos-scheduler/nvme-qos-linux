@@ -1791,6 +1791,7 @@ static void nvme_pci_complete_rq(struct request *req)
 		if (!list_empty(&iod->qos_node))
 			list_del_init(&iod->qos_node);
 		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+	}
 #endif
 	nvme_pci_unmap_rq(req);
 	nvme_complete_rq(req);
