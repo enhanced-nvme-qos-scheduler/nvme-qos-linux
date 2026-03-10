@@ -205,6 +205,7 @@ struct nvme_dev {
 #ifdef CONFIG_NVME_QOS
 	unsigned int qos_enabled;
 	unsigned int qos_high_weight;
+	unsigned int qos_normal_weight;
 	unsigned int qos_batch_limit;
 	unsigned int qos_bypass_enter_threshold;
 	unsigned int qos_bypass_exit_threshold;
@@ -274,6 +275,8 @@ struct nvme_queue {
 #ifdef CONFIG_NVME_QOS
 	struct list_head high_prio_list;
 	struct list_head normal_prio_list;
+	int high_credits;
+	int normal_credits;
 	s64 high_tokens;
 	s64 normal_tokens;
 	unsigned long last_refill_jiffies;
@@ -1329,7 +1332,7 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 	unsigned long now = jiffies;
 	unsigned long delta = now - nvmeq->last_refill_jiffies;
 	unsigned int high_rate = nvmeq->dev->qos_high_weight;
-	unsigned int normal_rate = 10 - high_rate;
+	unsigned int normal_rate = nvmeq->dev->qos_normal_weight;
 	unsigned int burst_window = nvmeq->dev->qos_burst_window;
 	unsigned int high_cap = high_rate * burst_window;
 	unsigned int normal_cap = normal_rate * burst_window;
@@ -1355,13 +1358,15 @@ static void nvme_qos_update_tokens(struct nvme_queue *nvmeq)
 }
 
 /**
- * nvme_qos_dequeue_wrr - Dequeue a request using WRR policy
+ * nvme_qos_dequeue_wrr - Dequeue a request using a Hybrid QoS policy
  * @nvmeq: The NVMe queue to dequeue from
  * @is_high: Output parameter set to true if the dequeued request is High Priority
  *
  * Returns a pointer to the dequeued request, or NULL if both lists are empty.
- * This function tracks tokens for WRR and determines priority status based
- * on the source list to avoid redundant bio-level priority checks.
+ * This function implements a dual-gating hybrid scheduler. It tracks count-based
+ * credits to enforce proportional throughput (WRR) under contention, and time-based
+ * tokens to cap burst sizes for latency isolation. Priority status is determined
+ * based on the source list to avoid redundant bio-level priority checks.
  */
 static struct nvme_iod *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_high)
 {
@@ -1371,20 +1376,49 @@ static struct nvme_iod *nvme_qos_dequeue_wrr(struct nvme_queue *nvmeq, bool *is_
 
 	nvme_qos_update_tokens(nvmeq);
 
-	if (high_pending) {
-		if (nvmeq->high_tokens > 0 || !normal_pending) {
+	/* 1. WRR Credit Refill */
+	if (nvmeq->high_credits <= 0 && nvmeq->normal_credits <= 0) {
+		nvmeq->high_credits = nvmeq->dev->qos_high_weight;
+		nvmeq->normal_credits = nvmeq->dev->qos_normal_weight;
+	}
+
+	/* 2. Contention Handling */
+	if (high_pending && normal_pending) {
+		if (nvmeq->high_credits > 0 && nvmeq->high_tokens > 0) {
 			iod = list_first_entry(&nvmeq->high_prio_list, struct nvme_iod, qos_node);
 			list_del_init(&iod->qos_node);
-			if (nvmeq->high_tokens > 0)
-				nvmeq->high_tokens--;
+			nvmeq->high_credits--;
+			nvmeq->high_tokens--;
 			*is_high = true;
 			return iod;
 		}
+
+		iod = list_first_entry(&nvmeq->normal_prio_list, struct nvme_iod, qos_node);
+		list_del_init(&iod->qos_node);
+		if (nvmeq->normal_credits > 0)
+			nvmeq->normal_credits--;
+		if (nvmeq->normal_tokens > 0)
+			nvmeq->normal_tokens--;
+		*is_high = false;
+		return iod;
+	}
+
+	if (high_pending) {
+		iod = list_first_entry(&nvmeq->high_prio_list, struct nvme_iod, qos_node);
+		list_del_init(&iod->qos_node);
+		if (nvmeq->high_credits > 0)
+			nvmeq->high_credits--;
+		if (nvmeq->high_tokens > 0)
+			nvmeq->high_tokens--;
+		*is_high = true;
+		return iod;
 	}
 
 	if (normal_pending) {
 		iod = list_first_entry(&nvmeq->normal_prio_list, struct nvme_iod, qos_node);
 		list_del_init(&iod->qos_node);
+		if (nvmeq->normal_credits > 0)
+			nvmeq->normal_credits--;
 		if (nvmeq->normal_tokens > 0)
 			nvmeq->normal_tokens--;
 		*is_high = false;
@@ -2452,7 +2486,9 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 	INIT_LIST_HEAD(&nvmeq->high_prio_list);
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
 	nvmeq->high_tokens = dev->qos_high_weight;
-	nvmeq->normal_tokens = 1;
+	nvmeq->normal_tokens = dev->qos_normal_weight;
+	nvmeq->high_credits = 0;
+	nvmeq->normal_credits = 0;
 	nvmeq->last_refill_jiffies = jiffies;
 	atomic_set(&nvmeq->in_flight, 0);
 	nvmeq->qos_bypass = 0;
@@ -2512,7 +2548,9 @@ static void nvme_init_queue(struct nvme_queue *nvmeq, u16 qid)
 	INIT_LIST_HEAD(&nvmeq->high_prio_list);
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
 	nvmeq->high_tokens = dev->qos_high_weight;
-	nvmeq->normal_tokens = 1;
+	nvmeq->normal_tokens = dev->qos_normal_weight;
+	nvmeq->high_credits = 0;
+	nvmeq->normal_credits = 0;
 	nvmeq->last_refill_jiffies = jiffies;
 	atomic_set(&nvmeq->in_flight, 0);
 	nvmeq->qos_bypass = 0;
@@ -3177,7 +3215,7 @@ static ssize_t qos_enable_store(struct device *dev, struct device_attribute *att
 }
 static DEVICE_ATTR_RW(qos_enable);
 
-static ssize_t qos_weight_show(struct device *dev, struct device_attribute *attr,
+static ssize_t qos_high_weight_show(struct device *dev, struct device_attribute *attr,
 			       char *buf)
 {
 	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
@@ -3185,23 +3223,42 @@ static ssize_t qos_weight_show(struct device *dev, struct device_attribute *attr
 	return sysfs_emit(buf, "%u\n", ndev->qos_high_weight);
 }
 
-static ssize_t qos_weight_store(struct device *dev, struct device_attribute *attr,
+static ssize_t qos_high_weight_store(struct device *dev, struct device_attribute *attr,
 				const char *buf, size_t count)
 {
 	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
 	unsigned int val;
 
-	if (kstrtouint(buf, 10, &val) < 0)
+	if (kstrtouint(buf, 10, &val) < 0 || val == 0)
 		return -EINVAL;
 
-	if (val == 0)
-		val = 1;
-
-	ndev->qos_high_weight = val;
+	WRITE_ONCE(ndev->qos_high_weight, val);
 	dev_info(dev, "NVMe QoS: High Priority Weight set to %u\n", val);
 	return count;
 }
-static DEVICE_ATTR_RW(qos_weight);
+static DEVICE_ATTR_RW(qos_high_weight);
+
+static ssize_t qos_normal_weight_show(struct device *dev, struct device_attribute *attr,
+			       char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	return sysfs_emit(buf, "%u\n", ndev->qos_normal_weight);
+}
+
+static ssize_t qos_normal_weight_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	unsigned int val;
+
+	if (kstrtouint(buf, 10, &val) < 0 || val == 0)
+		return -EINVAL;
+
+	WRITE_ONCE(ndev->qos_normal_weight, val);
+	dev_info(dev, "NVMe QoS: Normal Priority Weight set to %u\n", val);
+	return count;
+}
+static DEVICE_ATTR_RW(qos_normal_weight);
 
 static ssize_t qos_max_depth_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
@@ -3407,7 +3464,8 @@ static struct attribute *nvme_pci_attrs[] = {
 	&dev_attr_hmb.attr,
 #ifdef CONFIG_NVME_QOS
 	&dev_attr_qos_enable.attr,
-	&dev_attr_qos_weight.attr,
+	&dev_attr_qos_high_weight.attr,
+	&dev_attr_qos_normal_weight.attr,
 	&dev_attr_qos_batch_limit.attr,
 	&dev_attr_qos_max_depth.attr,
 	&dev_attr_qos_burst_window.attr,
@@ -4272,7 +4330,8 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 
 #ifdef CONFIG_NVME_QOS
 	dev->qos_enabled = 0;
-	dev->qos_high_weight = 9;
+	dev->qos_high_weight = 7;
+	dev->qos_normal_weight = 3;
 	dev->qos_batch_limit = 4;
 	dev->qos_bypass_enter_threshold = 1;
 	dev->qos_bypass_exit_threshold = 2;
