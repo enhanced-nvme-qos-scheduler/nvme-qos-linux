@@ -1780,15 +1780,17 @@ static __always_inline void nvme_pci_unmap_rq(struct request *req)
 static void nvme_pci_complete_rq(struct request *req)
 {
 #ifdef CONFIG_NVME_QOS
-	/* Make sure the qos_node is unlinked in the event of a cancel/timeout/etc. */
 	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
 
-	unsigned long flags;
-	struct nvme_queue *nvmeq = req->mq_hctx->driver_data;
+	if (unlikely(!list_empty_careful(&iod->qos_node))) {
+		struct nvme_queue *nvmeq = req->mq_hctx->driver_data;
+		unsigned long flags;
 
-	spin_lock_irqsave(&nvmeq->sq_lock, flags);
-	list_del_init(&iod->qos_node);
-	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+		spin_lock_irqsave(&nvmeq->sq_lock, flags);
+		/* Re-check under the lock to prevent races */
+		if (!list_empty(&iod->qos_node))
+			list_del_init(&iod->qos_node);
+		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 #endif
 	nvme_pci_unmap_rq(req);
 	nvme_complete_rq(req);
