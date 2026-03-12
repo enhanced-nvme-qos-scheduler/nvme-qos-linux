@@ -2285,8 +2285,8 @@ static enum blk_eh_timer_return nvme_timeout(struct request *req)
 	unsigned long sq_flags;
 
 	spin_lock_irqsave(&nvmeq->sq_lock, sq_flags);
-	if (!list_empty(&req->queuelist)) {
-		list_del_init(&req->queuelist);
+	if (!list_empty(&iod->qos_node)) {
+		list_del_init(&iod->qos_node);
 		if (test_bit(NVMEQ_ENABLED, &nvmeq->flags)) {
 			nvme_sq_submit_cmd(nvmeq, &iod->cmd);
 			nvme_write_sq_db(nvmeq, true);
