@@ -160,7 +160,7 @@ MODULE_PARM_DESC(qos_enable, "Enable NVMe QoS Scheduler by default (default: fal
 
 static unsigned int qos_high_weight = NVME_QOS_DFLT_HIGH_WEIGHT;
 module_param(qos_high_weight, uint, 0444);
-MODULE_PARM_DESC(qos_weight, "Default high priority weight (default: 7)");
+MODULE_PARM_DESC(qos_high_weight, "Default high priority weight (default: 7)");
 
 static unsigned int qos_normal_weight = NVME_QOS_DFLT_NORMAL_WEIGHT;
 module_param(qos_normal_weight, uint, 0444);
