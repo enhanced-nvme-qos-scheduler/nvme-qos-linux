@@ -531,6 +531,8 @@ enum {
 	NVME_QOS_FORCE_HIGH   = 1, /* Treat all traffic as High Priority */
 	NVME_QOS_FORCE_NORMAL = 2, /* Treat all traffic as Normal Priority */
 };
+
+#define NVME_QOS_NS_ENABLE_DEFAULT 1
 #endif
 
 struct nvme_ns {
@@ -560,6 +562,7 @@ struct nvme_ns {
 
 #ifdef CONFIG_NVME_QOS
 	unsigned int qos_policy;
+	unsigned int qos_enable;
 #endif
 };
 

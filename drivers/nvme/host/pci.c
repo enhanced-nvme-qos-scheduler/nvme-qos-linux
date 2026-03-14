@@ -1660,6 +1660,13 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (!static_branch_unlikely(&nvme_qos_active) || (dev->qos_enabled == 0))
 		goto direct_submit;
 
+	/* Per-namespace QoS bypass (Issue #36) */
+	if (req->q->queuedata) {
+		struct nvme_ns *ns = req->q->queuedata;
+		if (!READ_ONCE(ns->qos_enable))
+			goto direct_submit;
+	}
+
 	/* Low-depth bypass: skip QoS when no contention */
 	if (nvme_qos_in_bypass(nvmeq))
 		goto direct_submit;
@@ -1751,6 +1758,7 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 {
 	unsigned long flags;
 	struct request *req;
+	bool direct_submitted = false;
 
 	if (rq_list_empty(rqlist))
 		return;
@@ -1778,13 +1786,21 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 
 	while ((req = rq_list_pop(rqlist))) {
 		struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
-		if (nvme_qos_is_high_prio(req))
+		struct nvme_ns *ns = req->q->queuedata;
+
+		if (ns && !READ_ONCE(ns->qos_enable)) {
+			nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+			direct_submitted = true;
+		} else if (nvme_qos_is_high_prio(req)) {
 			list_add_tail(&iod->qos_node, &nvmeq->high_prio_list);
-		else
+		} else {
 			list_add_tail(&iod->qos_node, &nvmeq->normal_prio_list);
+		}
 	}
 
 	nvme_qos_dispatch(nvmeq, true);
+	if (direct_submitted)
+		nvme_write_sq_db(nvmeq, true);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 }
 #endif /* CONFIG_NVME_QOS */
