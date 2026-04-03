@@ -1270,6 +1270,39 @@ static int nvme_qos_drain_queue_locked(struct nvme_queue *nvmeq)
 }
 
 /*
+ * Unlink pending QoS requests from priority lists without submitting.
+ * Called with sq_lock held.
+ */
+static void nvme_qos_purge_queue_locked(struct nvme_queue *nvmeq)
+{
+	struct request *req, *tmp;
+
+	list_for_each_entry_safe(req, tmp, &nvmeq->high_prio_list, queuelist)
+		list_del_init(&req->queuelist);
+
+	list_for_each_entry_safe(req, tmp, &nvmeq->normal_prio_list, queuelist)
+		list_del_init(&req->queuelist);
+}
+
+/*
+ * Unlink all QoS-staged requests from I/O queues during device teardown.
+ * Must be called after queues are suspended, before nvme_cancel_tagset().
+ */
+static void nvme_qos_teardown_queues(struct nvme_dev *dev)
+{
+	unsigned int i;
+
+	for (i = 1; i < dev->ctrl.queue_count; i++) {
+		struct nvme_queue *nvmeq = &dev->queues[i];
+		unsigned long flags;
+
+		spin_lock_irqsave(&nvmeq->sq_lock, flags);
+		nvme_qos_purge_queue_locked(nvmeq);
+		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+	}
+}
+
+/*
  * Drain all pending QoS requests from all I/O queues.
  * Called when QoS is disabled at runtime.
  */
@@ -1676,6 +1709,13 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (!static_branch_unlikely(&nvme_qos_active) || (dev->qos_enabled == 0))
 		goto direct_submit;
 
+	/* Per-namespace QoS bypass (Issue #36) */
+	if (req->q->queuedata) {
+		struct nvme_ns *ns = req->q->queuedata;
+		if (!READ_ONCE(ns->qos_enable))
+			goto direct_submit;
+	}
+
 	/* Low-depth bypass: skip QoS when no contention */
 	if (nvme_qos_in_bypass(nvmeq))
 		goto direct_submit;
@@ -1767,6 +1807,7 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 {
 	unsigned long flags;
 	struct request *req;
+	bool direct_submitted = false;
 
 	if (rq_list_empty(rqlist))
 		return;
@@ -1794,13 +1835,21 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 
 	while ((req = rq_list_pop(rqlist))) {
 		struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
-		if (nvme_qos_is_high_prio(req))
+		struct nvme_ns *ns = req->q->queuedata;
+
+		if (ns && !READ_ONCE(ns->qos_enable)) {
+			nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+			direct_submitted = true;
+		} else if (nvme_qos_is_high_prio(req)) {
 			list_add_tail(&iod->qos_node, &nvmeq->high_prio_list);
-		else
+		} else {
 			list_add_tail(&iod->qos_node, &nvmeq->normal_prio_list);
+		}
 	}
 
 	nvme_qos_dispatch(nvmeq, true);
+	if (direct_submitted)
+		nvme_write_sq_db(nvmeq, true);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 }
 #endif /* CONFIG_NVME_QOS */
@@ -2613,9 +2662,9 @@ static void nvme_init_queue(struct nvme_queue *nvmeq, u16 qid)
 	/*
 	 * Reset QoS state.  After a device reset the old SQ is gone, so
 	 * in_flight must restart at zero.  Any requests that were parked
-	 * on the priority lists have already been cancelled by the
-	 * blk-mq tag-walk in the reset path; reinitialising the list
-	 * heads drops the stale (freed) entries.
+	 * on the priority lists were already explicitly unlinked by
+	 * nvme_qos_teardown_queues() before nvme_cancel_tagset() in the
+	 * disable path, so no stale entries remain here.
 	 */
 	INIT_LIST_HEAD(&nvmeq->high_prio_list);
 	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
@@ -4018,6 +4067,11 @@ static void nvme_dev_disable(struct nvme_dev *dev, bool shutdown)
 	if (pci_is_enabled(pdev))
 		pci_disable_device(pdev);
 	nvme_reap_pending_cqes(dev);
+
+#ifdef CONFIG_NVME_QOS
+	/* Unlink QoS-staged requests; nvme_cancel_tagset() handles completion. */
+	nvme_qos_teardown_queues(dev);
+#endif
 
 	nvme_cancel_tagset(&dev->ctrl);
 	nvme_cancel_admin_tagset(&dev->ctrl);
