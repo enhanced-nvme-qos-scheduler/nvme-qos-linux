@@ -4416,7 +4416,7 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 	dev->ctrl.max_integrity_segments = 1;
 
 #ifdef CONFIG_NVME_QOS
-	dev->qos_enabled = qos_enable;
+	dev->qos_enabled = 0;
 	dev->qos_high_weight = qos_high_weight;
 	dev->qos_normal_weight = qos_normal_weight;
 	dev->qos_batch_limit = qos_batch_limit;
@@ -4516,6 +4516,17 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		result = -ENODEV;
 		goto out_disable;
 	}
+
+#ifdef CONFIG_NVME_QOS
+	if (qos_enable) {
+		mutex_lock(&nvme_qos_sysfs_lock);
+		if (!dev->qos_enabled) {
+			static_branch_inc(&nvme_qos_active);
+			WRITE_ONCE(dev->qos_enabled, 1);
+		}
+		mutex_unlock(&nvme_qos_sysfs_lock);
+	}
+#endif
 
 	pci_set_drvdata(pdev, dev);
 
