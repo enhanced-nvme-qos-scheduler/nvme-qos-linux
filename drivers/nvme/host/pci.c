@@ -2290,6 +2290,29 @@ static enum blk_eh_timer_return nvme_timeout(struct request *req)
 		goto disable;
 	}
 
+#ifdef CONFIG_NVME_QOS
+	/*
+	 * Timer started before SQ submission; aborting a CID the controller
+	 * never saw would trigger a spurious reset on the second expiry.
+	 * Check under sq_lock rather than gating on qos_enabled: the disable
+	 * path clears that flag before draining the priority lists, so a
+	 * parked request can still be on a list when qos_enabled reads zero.
+	 */
+	unsigned long sq_flags;
+
+	spin_lock_irqsave(&nvmeq->sq_lock, sq_flags);
+	if (!list_empty(&iod->qos_node)) {
+		list_del_init(&iod->qos_node);
+		if (test_bit(NVMEQ_ENABLED, &nvmeq->flags)) {
+			nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+			nvme_write_sq_db(nvmeq, true);
+			spin_unlock_irqrestore(&nvmeq->sq_lock, sq_flags);
+			return BLK_EH_RESET_TIMER;
+		}
+	}
+	spin_unlock_irqrestore(&nvmeq->sq_lock, sq_flags);
+#endif
+
 	/*
 	 * Did we miss an interrupt?
 	 */
