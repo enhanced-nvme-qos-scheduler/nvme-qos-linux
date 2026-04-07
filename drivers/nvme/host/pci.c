@@ -1520,9 +1520,10 @@ reset:
  * doorbell once if any requests were submitted and either @commit is true or
  * high prio requested or submission queue wraps around.
  *
+ * Returns true if at least one request was submitted from QoS lists.
  * Must be called with sq_lock held.
  */
-static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
+static bool nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 {
 	unsigned int max_depth = nvmeq->dev->qos_max_depth;
 	unsigned int depth = (max_depth && max_depth < nvmeq->q_depth)
@@ -1553,6 +1554,7 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 		nvme_write_sq_db(nvmeq, commit || high_prio_submitted);
 
 	nvme_qos_check_enter_bypass(nvmeq);
+	return submitted > 0;
 }
 
 /*
@@ -1759,6 +1761,7 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 	unsigned long flags;
 	struct request *req;
 	bool direct_submitted = false;
+	bool qos_dispatched;
 
 	if (rq_list_empty(rqlist))
 		return;
@@ -1798,8 +1801,8 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 		}
 	}
 
-	nvme_qos_dispatch(nvmeq, true);
-	if (direct_submitted)
+	qos_dispatched = nvme_qos_dispatch(nvmeq, true);
+	if (direct_submitted && !qos_dispatched)
 		nvme_write_sq_db(nvmeq, true);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 }
