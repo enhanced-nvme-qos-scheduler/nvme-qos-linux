@@ -1524,7 +1524,7 @@ reset:
  */
 static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 {
-	unsigned int max_depth = nvmeq->dev->qos_max_depth;
+	unsigned int max_depth = READ_ONCE(nvmeq->dev->qos_max_depth);
 	unsigned int depth = (max_depth && max_depth < nvmeq->q_depth)
 				? max_depth : nvmeq->q_depth - 1;
 	unsigned int submitted = 0;
