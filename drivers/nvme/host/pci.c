@@ -1343,8 +1343,8 @@ static void nvme_qos_drain_all_queues(struct nvme_dev *dev)
 }
 
 /*
- * Queued but not submitted requests need to be failed during the
- * controller reset/queue reinit for consistent request handling
+ * QoS-staged requests are unlinked during queue suspend/free paths;
+ * request completion is handled by the normal NVMe cancel flow.
  */
 
 static bool nvme_qos_is_high_prio(struct request *req)
