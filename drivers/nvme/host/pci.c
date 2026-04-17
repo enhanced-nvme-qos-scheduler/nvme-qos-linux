@@ -4546,6 +4546,11 @@ out_put_ctrl:
 static void nvme_reset_prepare(struct pci_dev *pdev)
 {
 	struct nvme_dev *dev = pci_get_drvdata(pdev);
+	/*
+	 * We don't need to check the return value from waiting for the reset
+	 * state as pci_dev device lock is held, making it impossible to race
+	 * with ->remove().
+	 */
 	nvme_disable_prepare_reset(dev, false);
 	nvme_sync_queues(&dev->ctrl);
 }
