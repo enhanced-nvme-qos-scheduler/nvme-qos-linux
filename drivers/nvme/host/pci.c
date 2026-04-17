@@ -1324,13 +1324,22 @@ static int nvme_qos_drain_queue_locked(struct nvme_queue *nvmeq)
  */
 static void nvme_qos_purge_queue_locked(struct nvme_queue *nvmeq)
 {
-	struct request *req, *tmp;
+	struct nvme_iod *iod, *tmp;
 
-	list_for_each_entry_safe(req, tmp, &nvmeq->high_prio_list, queuelist)
-		list_del_init(&req->queuelist);
+	list_for_each_entry_safe(iod, tmp, &nvmeq->high_prio_list, qos_node)
+		list_del_init(&iod->qos_node);
 
-	list_for_each_entry_safe(req, tmp, &nvmeq->normal_prio_list, queuelist)
-		list_del_init(&req->queuelist);
+	list_for_each_entry_safe(iod, tmp, &nvmeq->normal_prio_list, qos_node)
+		list_del_init(&iod->qos_node);
+}
+
+static void nvme_qos_purge_queue(struct nvme_queue *nvmeq)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
+	nvme_qos_purge_queue_locked(nvmeq);
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 }
 
 /*
@@ -1381,6 +1390,11 @@ static void nvme_qos_drain_all_queues(struct nvme_dev *dev)
 		dev_info(dev->dev, "NVMe QoS: drained %d pending requests\n",
 			 total);
 }
+
+/*
+ * QoS-staged requests are unlinked during queue suspend/free paths;
+ * request completion is handled by the normal NVMe cancel flow.
+ */
 
 static bool nvme_qos_is_high_prio(struct request *req)
 {
@@ -2487,6 +2501,17 @@ static void nvme_free_queues(struct nvme_dev *dev, int lowest)
 	int i;
 
 	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--) {
+#ifdef CONFIG_NVME_QOS
+		struct nvme_queue *nvmeq = &dev->queues[i];
+
+		/*
+		 * Requests queued in QoS lists are not submitted to hardware.
+		 * Purge them before freeing queue memory.
+		 */
+		if (nvmeq->sq_cmds)
+			nvme_qos_purge_queue(nvmeq);
+#endif
+
 		dev->ctrl.queue_count--;
 		nvme_free_queue(&dev->queues[i]);
 	}
@@ -2503,8 +2528,17 @@ static void nvme_suspend_queue(struct nvme_dev *dev, unsigned int qid)
 	mb();
 
 	nvmeq->dev->online_queues--;
+
+	/*
+	 * Quiesce admin queue before purging any QoS-queued requests from it.
+	 */
 	if (!nvmeq->qid && nvmeq->dev->ctrl.admin_q)
 		nvme_quiesce_admin_queue(&nvmeq->dev->ctrl);
+
+#ifdef CONFIG_NVME_QOS
+	nvme_qos_purge_queue(nvmeq);
+#endif
+
 	if (!test_and_clear_bit(NVMEQ_POLLED, &nvmeq->flags))
 		pci_free_irq(to_pci_dev(dev->dev), nvmeq->cq_vector, nvmeq);
 }
@@ -3322,8 +3356,8 @@ static ssize_t qos_enable_store(struct device *dev, struct device_attribute *att
 		static_branch_inc(&nvme_qos_active);
 		WRITE_ONCE(ndev->qos_enabled, 1);
 	} else if (!enable && ndev->qos_enabled) {
-		// Set flag first to prevent new enqueues and
-		// ensure flag visible before drain
+		/* Set flag first to prevent new enqueues and */
+		/* ensure flag visible before drain */
 		WRITE_ONCE(ndev->qos_enabled, 0);
 		smp_mb();
 		nvme_qos_drain_all_queues(ndev);
