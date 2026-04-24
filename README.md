@@ -7,7 +7,7 @@ A machine using this scheduler will be able to manually fine-tune the ratio of I
 Additionally, the CPU usage will only increase by around 10-15% on average.
 As a drawback, however, there will be notably degraded performance for the throughput-intensive applications and workloads as they give up their IO slots.
 
-![Benchmarking Proof](Documentation/images/NVMe_QoS_README_Evidence.png)
+![Benchmarking Proof](Documentation/images/NVME_QOS_README_EVIDENCE.png)
 *1. Proof of Above Claims*
 
 For more information on this project's intent, development, and future goals, please read the research paper [here](https://.example.com). **DOI: `tba`**
