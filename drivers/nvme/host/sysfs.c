@@ -294,6 +294,30 @@ static ssize_t nvme_qos_policy_store(struct device *dev,
 	return ret;
 }
 static DEVICE_ATTR(qos_policy, S_IRUGO | S_IWUSR, nvme_qos_policy_show, nvme_qos_policy_store);
+
+static ssize_t qos_enable_show(struct device *dev, struct device_attribute *attr,
+			       char *buf)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+	struct nvme_ns *ns = disk->private_data;
+
+	return sysfs_emit(buf, "%u\n", READ_ONCE(ns->qos_enable));
+}
+
+static ssize_t qos_enable_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+	struct nvme_ns *ns = disk->private_data;
+	unsigned int enable;
+
+	if (kstrtouint(buf, 10, &enable) < 0)
+		return -EINVAL;
+
+	WRITE_ONCE(ns->qos_enable, enable ? 1 : 0);
+	return count;
+}
+static DEVICE_ATTR_RW(qos_enable);
 #endif /* CONFIG_NVME_QOS */
 
 static struct attribute *nvme_ns_attrs[] = {
@@ -307,6 +331,7 @@ static struct attribute *nvme_ns_attrs[] = {
 	&dev_attr_nuse.attr,
 #ifdef CONFIG_NVME_QOS
 	&dev_attr_qos_policy.attr,
+	&dev_attr_qos_enable.attr,
 #endif
 #ifdef CONFIG_NVME_MULTIPATH
 	&dev_attr_ana_grpid.attr,

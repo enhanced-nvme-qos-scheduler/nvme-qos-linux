@@ -143,6 +143,55 @@ static bool noacpi;
 module_param(noacpi, bool, 0444);
 MODULE_PARM_DESC(noacpi, "disable acpi bios quirks");
 
+#ifdef CONFIG_NVME_QOS
+
+#define NVME_QOS_DFLT_HIGH_WEIGHT	7
+#define NVME_QOS_DFLT_NORMAL_WEIGHT	3
+#define NVME_QOS_DFLT_BATCH_LIMIT	4
+#define NVME_QOS_DFLT_BURST_WINDOW	(HZ / 10)
+#define NVME_QOS_DFLT_BYPASS_ENTER	1
+#define NVME_QOS_DFLT_BYPASS_EXIT	2
+#define NVME_QOS_DFLT_ENTER_MS		5
+#define NVME_QOS_DFLT_EXIT_MS		0
+
+static bool qos_enable;
+module_param(qos_enable, bool, 0444);
+MODULE_PARM_DESC(qos_enable, "Enable NVMe QoS Scheduler by default (default: false)");
+
+static unsigned int qos_high_weight = NVME_QOS_DFLT_HIGH_WEIGHT;
+module_param(qos_high_weight, uint, 0444);
+MODULE_PARM_DESC(qos_high_weight, "Default high priority weight (default: 7)");
+
+static unsigned int qos_normal_weight = NVME_QOS_DFLT_NORMAL_WEIGHT;
+module_param(qos_normal_weight, uint, 0444);
+MODULE_PARM_DESC(qos_normal_weight, "Default normal priority weight (default: 3)");
+
+static unsigned int qos_batch_limit = NVME_QOS_DFLT_BATCH_LIMIT;
+module_param(qos_batch_limit, uint, 0444);
+MODULE_PARM_DESC(qos_batch_limit, "Default QoS batch dispatch limit (default: 4)");
+
+static unsigned int qos_burst_window = NVME_QOS_DFLT_BURST_WINDOW;
+module_param(qos_burst_window, uint, 0444);
+MODULE_PARM_DESC(qos_burst_window, "Default burst window cap (default: HZ / 10)");
+
+static unsigned int qos_bypass_enter_thresh = NVME_QOS_DFLT_BYPASS_ENTER;
+module_param_named(qos_bypass_enter_threshold, qos_bypass_enter_thresh, uint, 0444);
+MODULE_PARM_DESC(qos_bypass_enter_threshold, "Default in-flight threshold to enter bypass (default: 1)");
+
+static unsigned int qos_bypass_exit_thresh = NVME_QOS_DFLT_BYPASS_EXIT;
+module_param_named(qos_bypass_exit_threshold, qos_bypass_exit_thresh, uint, 0444);
+MODULE_PARM_DESC(qos_bypass_exit_threshold, "Default in-flight threshold to exit bypass (default: 2)");
+
+static unsigned int qos_bypass_enter_ms = NVME_QOS_DFLT_ENTER_MS;
+module_param(qos_bypass_enter_ms, uint, 0444);
+MODULE_PARM_DESC(qos_bypass_enter_ms, "Default ms to wait before entering bypass (default: 5)");
+
+static unsigned int qos_bypass_exit_ms = NVME_QOS_DFLT_EXIT_MS;
+module_param(qos_bypass_exit_ms, uint, 0444);
+MODULE_PARM_DESC(qos_bypass_exit_ms, "Default ms to wait before exiting bypass (default: 0)");
+
+#endif
+
 struct nvme_dev;
 struct nvme_queue;
 
@@ -1275,13 +1324,22 @@ static int nvme_qos_drain_queue_locked(struct nvme_queue *nvmeq)
  */
 static void nvme_qos_purge_queue_locked(struct nvme_queue *nvmeq)
 {
-	struct request *req, *tmp;
+	struct nvme_iod *iod, *tmp;
 
-	list_for_each_entry_safe(req, tmp, &nvmeq->high_prio_list, queuelist)
-		list_del_init(&req->queuelist);
+	list_for_each_entry_safe(iod, tmp, &nvmeq->high_prio_list, qos_node)
+		list_del_init(&iod->qos_node);
 
-	list_for_each_entry_safe(req, tmp, &nvmeq->normal_prio_list, queuelist)
-		list_del_init(&req->queuelist);
+	list_for_each_entry_safe(iod, tmp, &nvmeq->normal_prio_list, qos_node)
+		list_del_init(&iod->qos_node);
+}
+
+static void nvme_qos_purge_queue(struct nvme_queue *nvmeq)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&nvmeq->sq_lock, flags);
+	nvme_qos_purge_queue_locked(nvmeq);
+	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 }
 
 /*
@@ -1332,6 +1390,11 @@ static void nvme_qos_drain_all_queues(struct nvme_dev *dev)
 		dev_info(dev->dev, "NVMe QoS: drained %d pending requests\n",
 			 total);
 }
+
+/*
+ * QoS-staged requests are unlinked during queue suspend/free paths;
+ * request completion is handled by the normal NVMe cancel flow.
+ */
 
 static bool nvme_qos_is_high_prio(struct request *req)
 {
@@ -1520,11 +1583,12 @@ reset:
  * doorbell once if any requests were submitted and either @commit is true or
  * high prio requested or submission queue wraps around.
  *
+ * Returns true if at least one request was submitted from QoS lists.
  * Must be called with sq_lock held.
  */
-static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
+static bool nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 {
-	unsigned int max_depth = nvmeq->dev->qos_max_depth;
+	unsigned int max_depth = READ_ONCE(nvmeq->dev->qos_max_depth);
 	unsigned int depth = (max_depth && max_depth < nvmeq->q_depth)
 				? max_depth : nvmeq->q_depth - 1;
 	unsigned int submitted = 0;
@@ -1553,6 +1617,7 @@ static void nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 		nvme_write_sq_db(nvmeq, commit || high_prio_submitted);
 
 	nvme_qos_check_enter_bypass(nvmeq);
+	return submitted > 0;
 }
 
 /*
@@ -1660,6 +1725,13 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (!static_branch_unlikely(&nvme_qos_active) || (dev->qos_enabled == 0))
 		goto direct_submit;
 
+	/* Per-namespace QoS bypass (Issue #36) */
+	if (req->q->queuedata) {
+		struct nvme_ns *ns = req->q->queuedata;
+		if (!READ_ONCE(ns->qos_enable))
+			goto direct_submit;
+	}
+
 	/* Low-depth bypass: skip QoS when no contention */
 	if (nvme_qos_in_bypass(nvmeq))
 		goto direct_submit;
@@ -1751,6 +1823,8 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 {
 	unsigned long flags;
 	struct request *req;
+	bool direct_submitted = false;
+	bool qos_dispatched;
 
 	if (rq_list_empty(rqlist))
 		return;
@@ -1778,13 +1852,21 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 
 	while ((req = rq_list_pop(rqlist))) {
 		struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
-		if (nvme_qos_is_high_prio(req))
+		struct nvme_ns *ns = req->q->queuedata;
+
+		if (ns && !READ_ONCE(ns->qos_enable)) {
+			nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+			direct_submitted = true;
+		} else if (nvme_qos_is_high_prio(req)) {
 			list_add_tail(&iod->qos_node, &nvmeq->high_prio_list);
-		else
+		} else {
 			list_add_tail(&iod->qos_node, &nvmeq->normal_prio_list);
+		}
 	}
 
-	nvme_qos_dispatch(nvmeq, true);
+	qos_dispatched = nvme_qos_dispatch(nvmeq, true);
+	if (direct_submitted && !qos_dispatched)
+		nvme_write_sq_db(nvmeq, true);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 }
 #endif /* CONFIG_NVME_QOS */
@@ -2274,6 +2356,29 @@ static enum blk_eh_timer_return nvme_timeout(struct request *req)
 		goto disable;
 	}
 
+#ifdef CONFIG_NVME_QOS
+	/*
+	 * Timer started before SQ submission; aborting a CID the controller
+	 * never saw would trigger a spurious reset on the second expiry.
+	 * Check under sq_lock rather than gating on qos_enabled: the disable
+	 * path clears that flag before draining the priority lists, so a
+	 * parked request can still be on a list when qos_enabled reads zero.
+	 */
+	unsigned long sq_flags;
+
+	spin_lock_irqsave(&nvmeq->sq_lock, sq_flags);
+	if (!list_empty(&iod->qos_node)) {
+		list_del_init(&iod->qos_node);
+		if (test_bit(NVMEQ_ENABLED, &nvmeq->flags)) {
+			nvme_sq_submit_cmd(nvmeq, &iod->cmd);
+			nvme_write_sq_db(nvmeq, true);
+			spin_unlock_irqrestore(&nvmeq->sq_lock, sq_flags);
+			return BLK_EH_RESET_TIMER;
+		}
+	}
+	spin_unlock_irqrestore(&nvmeq->sq_lock, sq_flags);
+#endif
+
 	/*
 	 * Did we miss an interrupt?
 	 */
@@ -2396,6 +2501,17 @@ static void nvme_free_queues(struct nvme_dev *dev, int lowest)
 	int i;
 
 	for (i = dev->ctrl.queue_count - 1; i >= lowest; i--) {
+#ifdef CONFIG_NVME_QOS
+		struct nvme_queue *nvmeq = &dev->queues[i];
+
+		/*
+		 * Requests queued in QoS lists are not submitted to hardware.
+		 * Purge them before freeing queue memory.
+		 */
+		if (nvmeq->sq_cmds)
+			nvme_qos_purge_queue(nvmeq);
+#endif
+
 		dev->ctrl.queue_count--;
 		nvme_free_queue(&dev->queues[i]);
 	}
@@ -2412,8 +2528,17 @@ static void nvme_suspend_queue(struct nvme_dev *dev, unsigned int qid)
 	mb();
 
 	nvmeq->dev->online_queues--;
+
+	/*
+	 * Quiesce admin queue before purging any QoS-queued requests from it.
+	 */
 	if (!nvmeq->qid && nvmeq->dev->ctrl.admin_q)
 		nvme_quiesce_admin_queue(&nvmeq->dev->ctrl);
+
+#ifdef CONFIG_NVME_QOS
+	nvme_qos_purge_queue(nvmeq);
+#endif
+
 	if (!test_and_clear_bit(NVMEQ_POLLED, &nvmeq->flags))
 		pci_free_irq(to_pci_dev(dev->dev), nvmeq->cq_vector, nvmeq);
 }
@@ -3231,8 +3356,8 @@ static ssize_t qos_enable_store(struct device *dev, struct device_attribute *att
 		static_branch_inc(&nvme_qos_active);
 		WRITE_ONCE(ndev->qos_enabled, 1);
 	} else if (!enable && ndev->qos_enabled) {
-		// Set flag first to prevent new enqueues and
-		// ensure flag visible before drain
+		/* Set flag first to prevent new enqueues and */
+		/* ensure flag visible before drain */
 		WRITE_ONCE(ndev->qos_enabled, 0);
 		smp_mb();
 		nvme_qos_drain_all_queues(ndev);
@@ -4368,14 +4493,14 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 
 #ifdef CONFIG_NVME_QOS
 	dev->qos_enabled = 0;
-	dev->qos_high_weight = 7;
-	dev->qos_normal_weight = 3;
-	dev->qos_batch_limit = 4;
-	dev->qos_bypass_enter_threshold = 1;
-	dev->qos_bypass_exit_threshold = 2;
-	dev->qos_bypass_enter_ms = 5;
-	dev->qos_bypass_exit_ms = 0;
-	dev->qos_burst_window = HZ / 10;
+	dev->qos_high_weight = qos_high_weight;
+	dev->qos_normal_weight = qos_normal_weight;
+	dev->qos_batch_limit = qos_batch_limit;
+	dev->qos_bypass_enter_threshold = qos_bypass_enter_thresh;
+	dev->qos_bypass_exit_threshold = qos_bypass_exit_thresh;
+	dev->qos_bypass_enter_ms = qos_bypass_enter_ms;
+	dev->qos_bypass_exit_ms = qos_bypass_exit_ms;
+	dev->qos_burst_window = qos_burst_window;
 #endif
 
 	return dev;
@@ -4467,6 +4592,17 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		result = -ENODEV;
 		goto out_disable;
 	}
+
+#ifdef CONFIG_NVME_QOS
+	if (qos_enable) {
+		mutex_lock(&nvme_qos_sysfs_lock);
+		if (!dev->qos_enabled) {
+			static_branch_inc(&nvme_qos_active);
+			WRITE_ONCE(dev->qos_enabled, 1);
+		}
+		mutex_unlock(&nvme_qos_sysfs_lock);
+	}
+#endif
 
 	pci_set_drvdata(pdev, dev);
 
@@ -4958,6 +5094,40 @@ static int __init nvme_init(void)
 	BUILD_BUG_ON(sizeof(struct nvme_create_sq) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_delete_queue) != 64);
 	BUILD_BUG_ON(IRQ_AFFINITY_MAX_SETS < 2);
+
+#ifdef CONFIG_NVME_QOS
+	/* Validate module parameters to ensure hysteresis invariants */
+	if (qos_bypass_enter_thresh >= qos_bypass_exit_thresh) {
+		pr_warn("nvme: QoS bypass enter threshold (%u) must be less than exit threshold (%u). Falling back to defaults.\n",
+			qos_bypass_enter_thresh, qos_bypass_exit_thresh);
+		qos_bypass_enter_thresh = NVME_QOS_DFLT_BYPASS_ENTER;
+		qos_bypass_exit_thresh  = NVME_QOS_DFLT_BYPASS_EXIT;
+	}
+
+	/* Prevent zero-value configurations that would break scheduling */
+	if (!qos_high_weight) {
+		pr_warn("nvme: QoS weight cannot be 0. Falling back to default (%u).\n",
+			NVME_QOS_DFLT_HIGH_WEIGHT);
+		qos_high_weight = NVME_QOS_DFLT_HIGH_WEIGHT;
+	}
+
+	if (!qos_normal_weight) {
+		pr_warn("nvme: QoS normal weight cannot be 0. Falling back to default (%u).\n",
+			NVME_QOS_DFLT_NORMAL_WEIGHT);
+		qos_normal_weight = NVME_QOS_DFLT_NORMAL_WEIGHT;
+	}
+
+	if (!qos_batch_limit) {
+		pr_warn("nvme: QoS batch limit cannot be 0. Falling back to default (%u).\n",
+			NVME_QOS_DFLT_BATCH_LIMIT);
+		qos_batch_limit = NVME_QOS_DFLT_BATCH_LIMIT;
+	}
+
+	if (!qos_burst_window) {
+		pr_warn("nvme: QoS burst window cannot be 0. Falling back to default.\n");
+		qos_burst_window = NVME_QOS_DFLT_BURST_WINDOW;
+	}
+#endif
 
 	return pci_register_driver(&nvme_driver);
 }

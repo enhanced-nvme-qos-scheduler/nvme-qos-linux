@@ -27,3 +27,72 @@ jobs:
 
       - name: Run lint
         run: ./scripts/lint.sh
+
+  build:
+    name: build (NVME_QOS=${{ matrix.nvme_qos }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        nvme_qos: ['y', 'n']
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: sudo apt-get install -y build-essential libelf-dev flex bison bc
+
+      - name: Cache kernel build tree
+        id: cache-kbuild
+        uses: actions/cache@v4
+        with:
+          path: kbuild
+          key: kbuild-allmodconfig-${{ runner.os }}-${{ hashFiles('Makefile') }}
+
+      - name: Prepare kernel build tree
+        if: steps.cache-kbuild.outputs.cache-hit != 'true'
+        run: |
+          make O=kbuild allmodconfig
+          make O=kbuild modules_prepare -j$(nproc)
+
+      - name: Configure NVME_QOS=${{ matrix.nvme_qos }}
+        run: |
+          ./scripts/config --file kbuild/.config --module BLK_DEV_NVME
+          if [ "${{ matrix.nvme_qos }}" = "y" ]; then
+            ./scripts/config --file kbuild/.config --enable NVME_QOS
+          else
+            ./scripts/config --file kbuild/.config --disable NVME_QOS
+          fi
+          make O=kbuild olddefconfig
+          make O=kbuild syncconfig
+
+      - name: Build NVMe module
+        run: |
+          make O=kbuild M=drivers/nvme/host \
+            KCFLAGS="-Wunused-variable -Werror" \
+            KBUILD_MODPOST_WARN=1 \
+            -j$(nproc)
+
+      - name: Verify build output
+        run: |
+          ko=$(find . -name 'nvme.ko' -not -path './.git/*' | head -1)
+          if [ -z "$ko" ]; then
+            echo "::error::nvme.ko not found after build"
+            exit 1
+          fi
+          echo "Found: $ko"
+
+          if [ "${{ matrix.nvme_qos }}" = "y" ]; then
+            nm "$ko" | grep -q nvme_qos || {
+              echo "::error::QoS symbols missing from module built with NVME_QOS=y"
+              exit 1
+            }
+          else
+            if nm "$ko" | grep -q nvme_qos; then
+              echo "::error::QoS symbols present in module built with NVME_QOS=n"
+              exit 1
+            fi
+          fi
