@@ -1,6 +1,6 @@
 # NVMe QoS for Linux
 
-A lightweight, per-queue Quality of Service IO Scheduler for cloud environments and multi-tenant systems running Linux.
+A lightweight, per-queue Quality of Service (QoS) IO Scheduler for cloud environments and multi-tenant systems running Linux.
 The latency-sensitive applications on these systems suffer degraded performance (99th percentile latencies increasing by upwards of 500%) when competing with throughput-intensive workloads, such as backups, batch processing, and archiving.
 
 A machine using this scheduler will be able to manually fine-tune the ratio of IO requests between latency-sensitive and through-put intensive applications, as well as dynamically turn on and off the scheduler depending on the system's needs.
