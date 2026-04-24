@@ -1381,13 +1381,19 @@ static void nvme_qos_teardown_queues(struct nvme_dev *dev)
 	}
 }
 
-/* Must be called after nvme_quiesce_io_queues() stops new blk-mq dispatches. */
+/* Must publish NVMEQ_QOS_QUIESCED under sq_lock after blk-mq quiesce. */
 static void nvme_qos_mark_queues_quiesced(struct nvme_dev *dev)
 {
 	unsigned int i;
 
-	for (i = 1; i < dev->ctrl.queue_count; i++)
-		set_bit(NVMEQ_QOS_QUIESCED, &dev->queues[i].flags);
+	for (i = 1; i < dev->ctrl.queue_count; i++) {
+		struct nvme_queue *nvmeq = &dev->queues[i];
+		unsigned long flags;
+
+		spin_lock_irqsave(&nvmeq->sq_lock, flags);
+		set_bit(NVMEQ_QOS_QUIESCED, &nvmeq->flags);
+		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+	}
 }
 
 /*
@@ -1728,7 +1734,12 @@ static void nvme_qos_kick(struct nvme_queue *nvmeq)
 		return;
 
 	spin_lock_irqsave(&nvmeq->sq_lock, flags);
-	nvme_qos_dispatch(nvmeq, true);
+	/* Serialize against nvme_qos_mark_queues_quiesced() during disable. */
+	if (!test_bit(NVMEQ_QOS_QUIESCED, &nvmeq->flags) &&
+	    !READ_ONCE(nvmeq->qos_bypass) &&
+	    (!list_empty(&nvmeq->high_prio_list) ||
+	     !list_empty(&nvmeq->normal_prio_list)))
+		nvme_qos_dispatch(nvmeq, true);
 	spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 }
 #endif /* CONFIG_NVME_QOS */
