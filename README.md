@@ -11,7 +11,8 @@ As a drawback, however, there will be notably degraded performance for the throu
 
 *1. Proof of Above Claims*
 
-For more information on this project's intent, development, and future goals, please read the research paper [here](https://.example.com). **DOI: `tba`**
+## Information and Implementation
+For more information on this project's intent, development, and future goals, please read the research paper [here](https://.example.com). **DOI: `TBA`**
 
 See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for setup, build instructions, and
 contribution guidelines.
