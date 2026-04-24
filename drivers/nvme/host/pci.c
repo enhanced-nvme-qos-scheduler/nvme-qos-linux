@@ -316,6 +316,8 @@ struct nvme_queue {
 #define NVMEQ_SQ_CMB		1
 #define NVMEQ_DELETE_ERROR	2
 #define NVMEQ_POLLED		3
+/* blk-mq quiesced this queue; nvme_qos_kick() must not dispatch. */
+#define NVMEQ_QOS_QUIESCED	4
 	__le32 *dbbuf_sq_db;
 	__le32 *dbbuf_cq_db;
 	__le32 *dbbuf_sq_ei;
@@ -1290,6 +1292,25 @@ out_free_cmd:
 
 #ifdef CONFIG_NVME_QOS
 
+/* Called with sq_lock held, or before queue exposure in setup paths. */
+static void nvme_qos_reset_queue_state(struct nvme_queue *nvmeq)
+{
+	struct nvme_dev *dev = nvmeq->dev;
+
+	clear_bit(NVMEQ_QOS_QUIESCED, &nvmeq->flags);
+	INIT_LIST_HEAD(&nvmeq->high_prio_list);
+	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
+	nvmeq->high_tokens = dev->qos_high_weight;
+	nvmeq->normal_tokens = dev->qos_normal_weight;
+	nvmeq->high_credits = 0;
+	nvmeq->normal_credits = 0;
+	nvmeq->last_refill_jiffies = jiffies;
+	atomic_set(&nvmeq->in_flight, 0);
+	nvmeq->qos_bypass = 0;
+	nvmeq->bypass_enter_ts = 0;
+	nvmeq->bypass_exit_ts = 0;
+}
+
 /*
  * Drain pending QoS requests to hardware.
  * Called with sq_lock held.
@@ -1344,7 +1365,7 @@ static void nvme_qos_purge_queue(struct nvme_queue *nvmeq)
 
 /*
  * Unlink all QoS-staged requests from I/O queues during device teardown.
- * Must be called after queues are suspended, before nvme_cancel_tagset().
+ * Must be called after I/O queues are quiesced.
  */
 static void nvme_qos_teardown_queues(struct nvme_dev *dev)
 {
@@ -1358,6 +1379,15 @@ static void nvme_qos_teardown_queues(struct nvme_dev *dev)
 		nvme_qos_purge_queue_locked(nvmeq);
 		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
 	}
+}
+
+/* Must be called after nvme_quiesce_io_queues() stops new blk-mq dispatches. */
+static void nvme_qos_mark_queues_quiesced(struct nvme_dev *dev)
+{
+	unsigned int i;
+
+	for (i = 1; i < dev->ctrl.queue_count; i++)
+		set_bit(NVMEQ_QOS_QUIESCED, &dev->queues[i].flags);
 }
 
 /*
@@ -1681,7 +1711,12 @@ static void nvme_qos_kick(struct nvme_queue *nvmeq)
 {
 	unsigned long flags;
 
-	if (!static_branch_unlikely(&nvme_qos_active) || !nvmeq->dev->qos_enabled)
+	if (!static_branch_unlikely(&nvme_qos_active) ||
+	    !READ_ONCE(nvmeq->dev->qos_enabled))
+		return;
+	if (test_bit(NVMEQ_QOS_QUIESCED, &nvmeq->flags))
+		return;
+	if (!test_bit(NVMEQ_ENABLED, &nvmeq->flags))
 		return;
 
 	if (READ_ONCE(nvmeq->qos_bypass))
@@ -2641,17 +2676,7 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 	spin_lock_init(&nvmeq->cq_poll_lock);
 
 #ifdef CONFIG_NVME_QOS
-	INIT_LIST_HEAD(&nvmeq->high_prio_list);
-	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
-	nvmeq->high_tokens = dev->qos_high_weight;
-	nvmeq->normal_tokens = dev->qos_normal_weight;
-	nvmeq->high_credits = 0;
-	nvmeq->normal_credits = 0;
-	nvmeq->last_refill_jiffies = jiffies;
-	atomic_set(&nvmeq->in_flight, 0);
-	nvmeq->qos_bypass = 0;
-	nvmeq->bypass_enter_ts = 0;
-	nvmeq->bypass_exit_ts = 0;
+	nvme_qos_reset_queue_state(nvmeq);
 #endif
 
 	nvmeq->cq_head = 0;
@@ -2696,24 +2721,7 @@ static void nvme_init_queue(struct nvme_queue *nvmeq, u16 qid)
 	nvme_dbbuf_init(dev, nvmeq, qid);
 
 #ifdef CONFIG_NVME_QOS
-	/*
-	 * Reset QoS state.  After a device reset the old SQ is gone, so
-	 * in_flight must restart at zero.  Any requests that were parked
-	 * on the priority lists were already explicitly unlinked by
-	 * nvme_qos_teardown_queues() before nvme_cancel_tagset() in the
-	 * disable path, so no stale entries remain here.
-	 */
-	INIT_LIST_HEAD(&nvmeq->high_prio_list);
-	INIT_LIST_HEAD(&nvmeq->normal_prio_list);
-	nvmeq->high_tokens = dev->qos_high_weight;
-	nvmeq->normal_tokens = dev->qos_normal_weight;
-	nvmeq->high_credits = 0;
-	nvmeq->normal_credits = 0;
-	nvmeq->last_refill_jiffies = jiffies;
-	atomic_set(&nvmeq->in_flight, 0);
-	nvmeq->qos_bypass = 0;
-	nvmeq->bypass_enter_ts = 0;
-	nvmeq->bypass_exit_ts = 0;
+	nvme_qos_reset_queue_state(nvmeq);
 #endif
 
 	dev->online_queues++;
@@ -4093,6 +4101,12 @@ static void nvme_dev_disable(struct nvme_dev *dev, bool shutdown)
 
 	nvme_quiesce_io_queues(&dev->ctrl);
 
+#ifdef CONFIG_NVME_QOS
+	nvme_qos_mark_queues_quiesced(dev);
+	/* Quiesce blocks new submissions; unlink any QoS-staged carry-over. */
+	nvme_qos_teardown_queues(dev);
+#endif
+
 	if (!dead && dev->ctrl.queue_count > 0) {
 		nvme_delete_io_queues(dev);
 		nvme_disable_ctrl(&dev->ctrl, shutdown);
@@ -4104,11 +4118,6 @@ static void nvme_dev_disable(struct nvme_dev *dev, bool shutdown)
 	if (pci_is_enabled(pdev))
 		pci_disable_device(pdev);
 	nvme_reap_pending_cqes(dev);
-
-#ifdef CONFIG_NVME_QOS
-	/* Unlink QoS-staged requests; nvme_cancel_tagset() handles completion. */
-	nvme_qos_teardown_queues(dev);
-#endif
 
 	nvme_cancel_tagset(&dev->ctrl);
 	nvme_cancel_admin_tagset(&dev->ctrl);
@@ -4719,6 +4728,21 @@ static int nvme_resume(struct device *dev)
 		goto reset;
 	if (ctrl->hmpre && nvme_setup_host_mem(ndev))
 		goto reset;
+
+#ifdef CONFIG_NVME_QOS
+	if (READ_ONCE(ndev->qos_enabled)) {
+		unsigned int i;
+
+		for (i = 1; i < ndev->online_queues; i++) {
+			struct nvme_queue *nvmeq = &ndev->queues[i];
+			unsigned long flags;
+
+			spin_lock_irqsave(&nvmeq->sq_lock, flags);
+			nvme_qos_reset_queue_state(nvmeq);
+			spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
+		}
+	}
+#endif
 
 	return 0;
 reset:
