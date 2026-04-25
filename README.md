@@ -9,7 +9,7 @@ As a drawback, however, there will be notably degraded performance for the throu
 
 ![Benchmarking Proof](Documentation/images/NVME_QOS_README_EVIDENCE.png)
 
-*Image 1. Proof of Above 99th Percentile Latency Decreases*
+*Image 1. Proof of 99th Percentile Latency Decreases*
 
 ## Information and Implementation
 For more information on this project's intent, development, and future goals, please read the research paper [here](https://.example.com). **DOI: `TBA`**
