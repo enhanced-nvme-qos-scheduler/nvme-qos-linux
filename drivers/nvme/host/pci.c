@@ -316,7 +316,7 @@ struct nvme_queue {
 #define NVMEQ_SQ_CMB		1
 #define NVMEQ_DELETE_ERROR	2
 #define NVMEQ_POLLED		3
-/* blk-mq quiesced this queue; nvme_qos_kick() must not dispatch. */
+/* Queue disable/quiesce in progress; QoS must not stage or dispatch. */
 #define NVMEQ_QOS_QUIESCED	4
 	__le32 *dbbuf_sq_db;
 	__le32 *dbbuf_cq_db;
@@ -1771,7 +1771,8 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 #ifdef CONFIG_NVME_QOS
 	/* Bypass QoS if globally disabled or disabled for this device */
-	if (!static_branch_unlikely(&nvme_qos_active) || (dev->qos_enabled == 0))
+	if (!static_branch_unlikely(&nvme_qos_active) ||
+	    !READ_ONCE(dev->qos_enabled))
 		goto direct_submit;
 
 	/* Per-namespace QoS bypass (Issue #36) */
@@ -1947,8 +1948,8 @@ static void nvme_queue_rqs(struct rq_list *rqlist)
 #ifdef CONFIG_NVME_QOS
 		if (nvmeq && nvmeq != req->mq_hctx->driver_data) {
 			if (static_branch_unlikely(&nvme_qos_active) &&
-				nvmeq->dev->qos_enabled &&
-				!nvme_qos_in_bypass(nvmeq))
+			    READ_ONCE(nvmeq->dev->qos_enabled) &&
+			    !nvme_qos_in_bypass(nvmeq))
 				nvme_qos_submit_batch(nvmeq, &submit_list);
 			else
 				nvme_submit_cmds(nvmeq, &submit_list);
@@ -1968,7 +1969,7 @@ static void nvme_queue_rqs(struct rq_list *rqlist)
 #ifdef CONFIG_NVME_QOS
 	if (nvmeq) {
 		if (static_branch_unlikely(&nvme_qos_active) &&
-			nvmeq->dev->qos_enabled &&
+		    READ_ONCE(nvmeq->dev->qos_enabled) &&
 		    !nvme_qos_in_bypass(nvmeq))
 			nvme_qos_submit_batch(nvmeq, &submit_list);
 		else
