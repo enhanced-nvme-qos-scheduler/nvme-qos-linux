@@ -1381,7 +1381,7 @@ static void nvme_qos_teardown_queues(struct nvme_dev *dev)
 	}
 }
 
-/* Must publish NVMEQ_QOS_QUIESCED under sq_lock after blk-mq quiesce. */
+/* Must publish NVMEQ_QOS_QUIESCED under sq_lock before queue quiesce. */
 static void nvme_qos_mark_queues_quiesced(struct nvme_dev *dev)
 {
 	unsigned int i;
@@ -1630,6 +1630,9 @@ static bool nvme_qos_dispatch(struct nvme_queue *nvmeq, bool commit)
 	unsigned int submitted = 0;
 	bool high_prio_submitted = false;
 
+	if (test_bit(NVMEQ_QOS_QUIESCED, &nvmeq->flags))
+		return false;
+
 	while (submitted < nvmeq->dev->qos_batch_limit) {
 		unsigned int in_flight = atomic_read(&nvmeq->in_flight);
 		struct nvme_iod *iod;
@@ -1790,8 +1793,9 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 		nvmeq->bypass_enter_ts = 0;
 	}
 
-	/* Re-check QoS flag under lock to handle disable race */
-	if (unlikely(!READ_ONCE(dev->qos_enabled))) {
+	/* Quiesce or disable must bypass QoS staging under the lock. */
+	if (unlikely(test_bit(NVMEQ_QOS_QUIESCED, &nvmeq->flags) ||
+		     !READ_ONCE(dev->qos_enabled))) {
 		nvme_sq_submit_cmd(nvmeq, &iod->cmd);
 		nvme_write_sq_db(nvmeq, bd->last);
 		spin_unlock_irqrestore(&nvmeq->sq_lock, flags);
@@ -1884,8 +1888,9 @@ static void nvme_qos_submit_batch(struct nvme_queue *nvmeq,
 		nvmeq->bypass_exit_ts = 0;
 	}
 
-	/* Re-check under lock to handle disable race */
-	if (unlikely(!READ_ONCE(nvmeq->dev->qos_enabled))) {
+	/* Quiesce or disable must bypass QoS staging under the lock. */
+	if (unlikely(test_bit(NVMEQ_QOS_QUIESCED, &nvmeq->flags) ||
+		     !READ_ONCE(nvmeq->dev->qos_enabled))) {
 		while ((req = rq_list_pop(rqlist))) {
 			struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
 
@@ -2415,7 +2420,8 @@ static enum blk_eh_timer_return nvme_timeout(struct request *req)
 	spin_lock_irqsave(&nvmeq->sq_lock, sq_flags);
 	if (!list_empty(&iod->qos_node)) {
 		list_del_init(&iod->qos_node);
-		if (test_bit(NVMEQ_ENABLED, &nvmeq->flags)) {
+		if (test_bit(NVMEQ_ENABLED, &nvmeq->flags) &&
+		    !test_bit(NVMEQ_QOS_QUIESCED, &nvmeq->flags)) {
 			nvme_sq_submit_cmd(nvmeq, &iod->cmd);
 			nvme_write_sq_db(nvmeq, true);
 			spin_unlock_irqrestore(&nvmeq->sq_lock, sq_flags);
@@ -4110,13 +4116,10 @@ static void nvme_dev_disable(struct nvme_dev *dev, bool shutdown)
 			nvme_wait_freeze_timeout(&dev->ctrl, NVME_IO_TIMEOUT);
 	}
 
-	nvme_quiesce_io_queues(&dev->ctrl);
-
 #ifdef CONFIG_NVME_QOS
 	nvme_qos_mark_queues_quiesced(dev);
-	/* Quiesce blocks new submissions; unlink any QoS-staged carry-over. */
-	nvme_qos_teardown_queues(dev);
 #endif
+	nvme_quiesce_io_queues(&dev->ctrl);
 
 	if (!dead && dev->ctrl.queue_count > 0) {
 		nvme_delete_io_queues(dev);
@@ -4131,6 +4134,9 @@ static void nvme_dev_disable(struct nvme_dev *dev, bool shutdown)
 	nvme_reap_pending_cqes(dev);
 
 	nvme_cancel_tagset(&dev->ctrl);
+#ifdef CONFIG_NVME_QOS
+	nvme_qos_teardown_queues(dev);
+#endif
 	nvme_cancel_admin_tagset(&dev->ctrl);
 
 	/*
