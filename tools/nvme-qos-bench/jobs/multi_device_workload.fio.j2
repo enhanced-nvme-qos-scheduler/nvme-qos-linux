@@ -1,0 +1,43 @@
+; Multi-device workload: concurrent high-priority and normal-priority jobs
+; across multiple NVMe namespaces/devices. Each target gets independent fio
+; sections so per-priority metrics can be aggregated across targets.
+[global]
+ioengine=libaio
+direct=1
+time_based=1
+runtime={{ runtime }}
+ramp_time={{ ramp_time }}
+group_reporting=0
+{% if cpus_allowed %}
+cpus_allowed={{ cpus_allowed }}
+{% endif %}
+
+{% for target in targets %}
+{% if target.high %}
+[high-prio-reads-{{ target.name }}]
+filename={{ target.path }}
+rw={{ high_rw | default('randread') }}
+bs={{ high_bs | default('4k') }}
+iodepth={{ high_iodepth }}
+numjobs={{ high_numjobs }}
+prio={{ high_prio | default(0) }}
+prioclass={{ high_prioclass | default(1) }}
+new_group
+
+{% endif %}
+{% if target.normal %}
+[normal-prio-writes-{{ target.name }}]
+filename={{ target.path }}
+rw={{ normal_rw | default('write') }}
+bs={{ normal_bs | default('1m') }}
+iodepth={{ normal_iodepth }}
+numjobs={{ normal_numjobs }}
+{% if normal_rw | default('write') in ['write', 'randwrite'] %}
+offset=50%
+size=50%
+{% endif %}
+prio={{ normal_prio | default(4) }}
+prioclass={{ normal_prioclass | default(2) }}
+
+{% endif %}
+{% endfor %}

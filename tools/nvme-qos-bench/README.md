@@ -16,6 +16,7 @@ Benchmarking tool for the Linux NVMe QoS scheduler. Measures p99 latency improve
 ```bash
 sudo ./nvme_qos_bench.py check
 sudo ./nvme_qos_bench.py run -d nvme0n1 -c C
+sudo ./nvme_qos_bench.py run --devices nvme0n1 nvme1n1 nvme2n1 -c C --multi-device-mode isolation
 ./nvme_qos_bench.py analyze -i ./results/run_<timestamp>
 ```
 
@@ -37,11 +38,15 @@ Run a benchmark condition. Interleaves QoS-off and QoS-on iterations at each que
 sudo ./nvme_qos_bench.py run -d nvme0n1 -c C
 sudo ./nvme_qos_bench.py run -d nvme0n1 -c E --weights 1 4 9 19 99
 sudo ./nvme_qos_bench.py run -d nvme0n1 -c B --depths 32 64 128
+sudo ./nvme_qos_bench.py run --devices nvme0n1 nvme1n1 nvme2n1 nvme3n1 nvme4n1 nvme5n1 -c C
+sudo ./nvme_qos_bench.py run --devices nvme0n1 nvme1n1 -c C --multi-device-mode isolation
 ```
 
 | Flag | Description |
 |------|-------------|
 | `-d DEV` | Target device or partition (e.g. `nvme0n1`) |
+| `--devices DEV ...` | Concurrent multi-device / multi-namespace targets |
+| `--multi-device-mode MODE` | `replicated`: high+normal jobs on every target; `isolation`: high-priority on first target, normal-priority on the remaining targets |
 | `-c/-C ID` | Condition profile to run — required (A, B, C, D, E) |
 | `-o DIR` | Output directory (default: `./results`) |
 | `--iterations N` | Override iteration count |
@@ -119,6 +124,27 @@ Each run writes to `./.nvme-qos-results/run_<timestamp>/`:
 | `summary.md` | Full markdown report with tables and analysis |
 | `dmesg.txt` | Kernel log captured during the run |
 | `raw/*.json` | Raw fio JSON output for every iteration |
+
+## Multi-Device / Namespace Testing
+
+Use `--devices` to run one fio process with independent job sections per target. This keeps start and stop times synchronized while preserving per-priority metrics.
+
+Modes:
+
+- `replicated`: every target runs both high-priority reads and normal-priority writes. Use this for N-device scaling tests, including the 6-device target from issue #94.
+- `isolation`: the first target runs high-priority reads and every remaining target runs normal-priority writes. Use this for mix-mode leakage checks, such as high-priority traffic on `nvme0n1` while best-effort traffic runs on `nvme1n1`.
+
+Examples:
+
+```bash
+# Six-device scale test
+sudo ./nvme_qos_bench.py run --devices nvme0n1 nvme1n1 nvme2n1 nvme3n1 nvme4n1 nvme5n1 -C C
+
+# Cross-device isolation test
+sudo ./nvme_qos_bench.py run --devices nvme0n1 nvme1n1 -C C --multi-device-mode isolation
+```
+
+Kernel QoS counters are aggregated across the selected controllers. Metadata records the target list, controller list, per-device queue counts, and selected multi-device mode.
 
 ## QoS Sysfs Controls
 

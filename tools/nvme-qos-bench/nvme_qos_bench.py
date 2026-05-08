@@ -43,7 +43,7 @@ from lib.progress import (
     Progress, colored, print_header, print_warning,
     print_separator, print_summary, format_us, si_format,
 )
-from lib.kernel_stats import QoSKernelStats
+from lib.kernel_stats import QoSKernelStats, MultiQoSKernelStats
 
 
 def cmd_check(args) -> int:
@@ -190,6 +190,52 @@ def select_device(args, prefs: UserPreferences) -> Optional[str]:
     print("(use --reset-device to change)")
 
     return selected.name
+
+
+def select_devices(args, prefs: UserPreferences) -> Optional[List[str]]:
+    """Select one or more devices. Multi-device mode requires explicit CLI targets."""
+    if getattr(args, "devices", None):
+        selected = []
+        seen = set()
+        for dev_arg in args.devices:
+            name = dev_arg.replace("/dev/", "")
+            if name in seen:
+                continue
+            valid, msg = validate_device(name)
+            if not valid:
+                print(colored(f"Error: {msg}", "red"), file=sys.stderr)
+                return None
+            selected.append(name)
+            seen.add(name)
+
+        if not selected:
+            print(colored("Error: no devices selected", "red"), file=sys.stderr)
+            return None
+
+        print()
+        print(colored("Benchmarking will OVERWRITE data on these devices:", "yellow"))
+        known = {d.name: d for d in discover_nvme_devices()}
+        for name in selected:
+            dev = known.get(name)
+            mount_info = f" mounted at {dev.mount_point}" if dev and dev.mount_point else ""
+            if mount_info:
+                print(colored(f"  /dev/{name}{mount_info}", "red"))
+            else:
+                print(f"  /dev/{name}")
+
+        try:
+            confirm = input("  Type 'yes' to confirm: ").strip()
+            if confirm.lower() != "yes":
+                print("Aborted.", file=sys.stderr)
+                return None
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+
+        return selected
+
+    device = select_device(args, prefs)
+    return [device] if device else None
 
 
 def _run_drift_probe(runner: FioRunner, runtime: int = 5) -> Optional[float]:
@@ -466,6 +512,19 @@ def _run_qos_iter(
     return get_primary_metrics(metrics), get_normal_metrics(metrics)
 
 
+def _multi_targets(devices: List[NVMeDevice], mode: str) -> List[Dict[str, Any]]:
+    """Build fio target descriptors for multi-device runs."""
+    targets = []
+    for i, dev in enumerate(devices):
+        targets.append({
+            "name": dev.name.replace("/", "_"),
+            "path": dev.path,
+            "high": mode == "replicated" or i == 0,
+            "normal": mode == "replicated" or i > 0,
+        })
+    return targets
+
+
 def _run_interleaved_depth(
     runner: FioRunner, device: NVMeDevice, config: BenchmarkConfig,
     depth: int, weight: int, cpus_allowed: Optional[str],
@@ -474,6 +533,8 @@ def _run_interleaved_depth(
     workload_type: Optional[str] = None,
     run_baseline_override: Optional[bool] = None,
     run_qos_override: Optional[bool] = None,
+    devices: Optional[List[NVMeDevice]] = None,
+    multi_targets: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Run interleaved baseline+QoS iterations for a single depth.
 
@@ -487,8 +548,9 @@ def _run_interleaved_depth(
     """
     run_baseline = run_baseline_override if run_baseline_override is not None \
                    else config.run_baseline
+    qos_devices = devices or [device]
     run_qos = (run_qos_override if run_qos_override is not None \
-               else config.run_qos) and device.qos_available
+               else config.run_qos) and any(dev.qos_available for dev in qos_devices)
     interleaved = run_baseline and run_qos
 
     baseline_results = []
@@ -519,20 +581,65 @@ def _run_interleaved_depth(
         progress.set(iteration)
 
         if run_baseline:
-            primary, norm = _run_baseline_iter(
-                run_fn, device, config, effective_depth, depth,
-                cpus_allowed, label_prefix, iteration,
-            )
+            if len(qos_devices) > 1:
+                for dev in qos_devices:
+                    if dev.qos_available:
+                        dev.set_qos_enabled(False)
+                success, fio_data = run_fn(
+                    high_iodepth=effective_depth,
+                    high_numjobs=config.high_numjobs,
+                    normal_iodepth=effective_depth,
+                    normal_numjobs=config.normal_numjobs,
+                    runtime=config.runtime,
+                    ramp_time=config.ramp_time,
+                    iteration=iteration,
+                    label=f"{label_prefix}baseline_i{iteration}",
+                    cpus_allowed=cpus_allowed,
+                    workload_params=config.workload_params,
+                    targets=multi_targets,
+                )
+                if success and fio_data:
+                    metrics = extract_fio_metrics(fio_data)
+                    primary, norm = get_primary_metrics(metrics), get_normal_metrics(metrics)
+                else:
+                    primary, norm = None, None
+            else:
+                primary, norm = _run_baseline_iter(
+                    run_fn, device, config, effective_depth, depth,
+                    cpus_allowed, label_prefix, iteration,
+                )
             if primary is not None:
                 baseline_results.append(primary)
                 if norm:
                     baseline_normal.append(norm)
 
         if run_qos:
-            primary, norm = _run_qos_iter(
-                run_fn, device, config, depth,
-                cpus_allowed, label_prefix, weight, iteration,
-            )
+            if len(qos_devices) > 1:
+                for dev in qos_devices:
+                    dev.set_qos_enabled(True)
+                success, fio_data = run_fn(
+                    high_iodepth=depth,
+                    high_numjobs=config.high_numjobs,
+                    normal_iodepth=depth,
+                    normal_numjobs=config.normal_numjobs,
+                    runtime=config.runtime,
+                    ramp_time=config.ramp_time,
+                    iteration=iteration,
+                    label=f"{label_prefix}qos_w{weight}_i{iteration}",
+                    cpus_allowed=cpus_allowed,
+                    workload_params=config.workload_params,
+                    targets=multi_targets,
+                )
+                if success and fio_data:
+                    metrics = extract_fio_metrics(fio_data)
+                    primary, norm = get_primary_metrics(metrics), get_normal_metrics(metrics)
+                else:
+                    primary, norm = None, None
+            else:
+                primary, norm = _run_qos_iter(
+                    run_fn, device, config, depth,
+                    cpus_allowed, label_prefix, weight, iteration,
+                )
             if primary is not None:
                 qos_results.append(primary)
                 if norm:
@@ -565,6 +672,7 @@ def run_benchmark_suite(
     output_dir: Path,
     compare: bool = False,
     kernel_stats: Optional[QoSKernelStats] = None,
+    devices: Optional[List[NVMeDevice]] = None,
 ) -> Dict[str, Any]:
     """Run the complete benchmark suite with interleaved baseline/QoS iterations.
 
@@ -580,11 +688,16 @@ def run_benchmark_suite(
     }
     drift_probes = []
     weight_order = None
+    devices = devices or [device]
+    multi_device = len(devices) > 1
 
     runner = FioRunner(device.path, output_dir)
+    multi_targets = _multi_targets(devices, config.multi_device_mode) if multi_device else None
+    if multi_device and config.run_buffered:
+        print_warning("Buffered workloads are single-device only; skipping --buffered for multi-device run.")
 
     # Detect HW queue count and compute cpus_allowed
-    hw_queues = device.get_hw_queue_count()
+    hw_queues = min(dev.get_hw_queue_count() for dev in devices)
     active_queues = config.max_queues if config.max_queues else hw_queues
     total_jobs = config.high_numjobs + config.normal_numjobs
     jobs_per_queue = total_jobs / active_queues if active_queues else 0
@@ -604,12 +717,15 @@ def run_benchmark_suite(
         )
 
     # Save initial device state
-    device.save_state()
+    for dev in devices:
+        dev.save_state()
 
     try:
         # Apply namespace policy override if set by condition profile
-        if config.namespace_policy and device.qos_available:
-            device.set_qos_policy(config.namespace_policy)
+        if config.namespace_policy:
+            for dev in devices:
+                if dev.qos_available:
+                    dev.set_qos_policy(config.namespace_policy)
 
         # Randomize weight order to avoid systematic bias
         weights = list(config.weights)
@@ -632,11 +748,13 @@ def run_benchmark_suite(
                 _run_interleaved_depth(
                     runner, device, config, depth, weights[0], cpus_allowed,
                     kernel_stats, results,
-                    run_fn=runner.run_mixed_workload,
+                    run_fn=runner.run_multi_device_workload if multi_device else runner.run_mixed_workload,
                     run_baseline_override=True,
                     run_qos_override=False,
+                    devices=devices,
+                    multi_targets=multi_targets,
                 )
-                if config.run_buffered:
+                if config.run_buffered and not multi_device:
                     _run_interleaved_depth(
                         runner, device, config, depth, weights[0], cpus_allowed,
                         kernel_stats, results,
@@ -671,9 +789,11 @@ def run_benchmark_suite(
             first_weight = False
 
             # Set weight and max depth once before the depth loop
-            if device.qos_available:
-                device.set_qos_weight(weight)
-                device.set_qos_max_depth(config.qos_max_depth)
+            if any(dev.qos_available for dev in devices):
+                for dev in devices:
+                    if dev.qos_available:
+                        dev.set_qos_weight(weight)
+                        dev.set_qos_max_depth(config.qos_max_depth)
 
             for depth in config.depths:
                 if depth < 16 and len(config.depths) > 3:
@@ -684,12 +804,14 @@ def run_benchmark_suite(
                 _run_interleaved_depth(
                     runner, device, config, depth, weight, cpus_allowed,
                     kernel_stats, results,
-                    run_fn=runner.run_mixed_workload,
+                    run_fn=runner.run_multi_device_workload if multi_device else runner.run_mixed_workload,
                     run_baseline_override=False if is_weight_sweep else None,
+                    devices=devices,
+                    multi_targets=multi_targets,
                 )
 
                 # Interleaved buffered I/O (opt-in)
-                if config.run_buffered:
+                if config.run_buffered and not multi_device:
                     _run_interleaved_depth(
                         runner, device, config, depth, weight, cpus_allowed,
                         kernel_stats, results,
@@ -711,7 +833,8 @@ def run_benchmark_suite(
                     "yellow"), file=sys.stderr)
 
     finally:
-        device.restore_state()
+        for dev in devices:
+            dev.restore_state()
 
     # Store drift probes and weight order in results metadata
     if drift_probes:
@@ -1211,11 +1334,13 @@ def cmd_validate(args) -> int:
         return 1
 
     prefs = UserPreferences.load()
-    device_name = select_device(args, prefs)
-    if not device_name:
+    device_names = select_devices(args, prefs)
+    if not device_names:
         return 1
 
-    device = NVMeDevice(device_name)
+    devices = [NVMeDevice(name) for name in device_names]
+    device = devices[0]
+    device_name = device.name
 
     if not device.qos_available:
         print(colored("Error: QoS not available (CONFIG_NVME_QOS not enabled)", "red"),
@@ -1428,6 +1553,24 @@ def _save_metadata(device, config, condition_profile, system_info, results, outp
     save_json(metadata, output_dir / "metadata.json")
 
 
+def _save_metadata_multi(devices, config, condition_profile, system_info, results, output_dir):
+    """Create metadata for a multi-device run."""
+    _save_metadata(devices[0], config, condition_profile, system_info, results, output_dir)
+    metadata_path = output_dir / "metadata.json"
+    with open(metadata_path) as f:
+        metadata = json.load(f)
+
+    hw_queues = {dev.name: dev.get_hw_queue_count() for dev in devices}
+    metadata["system"]["devices"] = [dev.name for dev in devices]
+    metadata["system"]["controllers"] = sorted({dev.controller for dev in devices})
+    metadata["config"]["multi_device"] = len(devices) > 1
+    metadata["config"]["multi_device_mode"] = config.multi_device_mode
+    metadata["config"]["device_count"] = len(devices)
+    metadata["config"]["hw_queues_by_device"] = hw_queues
+    metadata["config"]["targets"] = _multi_targets(devices, config.multi_device_mode)
+    save_json(metadata, metadata_path)
+
+
 def _print_benchmark_summary(results):
     """Calculate and print benchmark summary statistics."""
     if not (results["qos"] and results["baseline"]):
@@ -1553,34 +1696,42 @@ def cmd_run(args) -> int:
     config, condition_profile = result
 
     _apply_cli_overrides(args, config, condition_profile)
+    config.multi_device_mode = args.multi_device_mode
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_dir = Path(args.output) / f"run_{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    kernel_stats = QoSKernelStats(device.controller)
+    controllers = sorted({dev.controller for dev in devices})
+    kernel_stats = (MultiQoSKernelStats(controllers)
+                    if len(controllers) > 1 else QoSKernelStats(device.controller))
 
     kernel = get_kernel_version()
-    print_header(device_name, kernel, device.qos_available, kernel_stats.available)
+    display_device = ",".join(device_names)
+    print_header(display_device, kernel, all(dev.qos_available for dev in devices),
+                 kernel_stats.available)
 
-    if not device.qos_available:
+    if not any(dev.qos_available for dev in devices):
         print_warning("NVMe QoS not available (CONFIG_NVME_QOS not enabled)")
         print("  Running baseline benchmarks only - no QoS comparison possible", file=sys.stderr)
         print("  Rebuild kernel with CONFIG_NVME_QOS=y to enable QoS testing", file=sys.stderr)
+    elif len(devices) > 1 and not all(dev.qos_available for dev in devices):
+        print_warning("Some selected controllers do not expose QoS sysfs controls")
 
-    system_info = collect_system_info(device_name, device.controller)
+    system_info = collect_system_info(display_device, device.controller)
     start_time = time.time()
 
     results = run_benchmark_suite(
         device, config, output_dir,
         compare=args.compare,
         kernel_stats=kernel_stats,
+        devices=devices,
     )
 
     print_separator()
     _print_benchmark_summary(results)
 
-    _save_metadata(device, config, condition_profile, system_info, results, output_dir)
+    _save_metadata_multi(devices, config, condition_profile, system_info, results, output_dir)
     save_json(results, output_dir / "aggregate.json")
     _save_csv_results(results, output_dir)
     _save_reports(args, results, system_info, output_dir)
@@ -2504,6 +2655,9 @@ def main():
   Weight sweep for proportionality validation:
     ./nvme_qos_bench.py run -d nvme0n1 -C E
 
+  Multi-device mix-mode audit:
+    ./nvme_qos_bench.py run --devices nvme0n1 nvme1n1 nvme2n1 -C C --multi-device-mode isolation
+
   Override depths and weights for a condition:
     ./nvme_qos_bench.py run -d nvme0n1 -C C --depths 32 64 --weights 4 9 19
 
@@ -2512,6 +2666,12 @@ def main():
 """
     )
     run_parser.add_argument("-d", "--device", metavar="DEV", help="NVMe device (e.g., nvme0n1)")
+    run_parser.add_argument("--devices", nargs="+", metavar="DEV",
+                           help="NVMe devices/namespaces for concurrent multi-device testing")
+    run_parser.add_argument("--multi-device-mode", choices=["replicated", "isolation"],
+                           default="replicated",
+                           help="Multi-device layout: replicated=high+normal on every target, "
+                                "isolation=high on first target and normal on remaining targets")
     run_parser.add_argument("--reset-device", action="store_true",
                            help="Clear saved device preference")
     run_parser.add_argument("-o", "--output", metavar="DIR", default="./.nvme-qos-results",

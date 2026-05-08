@@ -34,6 +34,7 @@ class BenchmarkConfig:
     high_numjobs: int = 1
     normal_numjobs: int = 4
     max_queues: Optional[int] = None  # Pin fio to N CPUs (= N HW queues)
+    multi_device_mode: str = "replicated"  # replicated or isolation
 
     # Condition profile metadata
     condition_id: Optional[str] = None        # Which condition profile was used

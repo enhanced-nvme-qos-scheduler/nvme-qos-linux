@@ -6,7 +6,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -48,6 +48,7 @@ class FioJobParams:
     normal_prioclass: Optional[int] = None
     high_prio: Optional[int] = None
     high_prioclass: Optional[int] = None
+    targets: Optional[List[Dict[str, Any]]] = None
 
 
 def render_template(template_name: str, params: Dict[str, Any]) -> str:
@@ -238,6 +239,37 @@ class FioRunner:
         return self._run_job(
             name=name,
             template="buffered_workload.fio.j2",
+            params=params,
+            iteration=iteration,
+        )
+
+    def run_multi_device_workload(self, high_iodepth: int = 16, high_numjobs: int = 1,
+                                  normal_iodepth: int = 16, normal_numjobs: int = 4,
+                                  runtime: int = 60, ramp_time: int = 5,
+                                  iteration: int = 0,
+                                  label: str = "",
+                                  cpus_allowed: Optional[str] = None,
+                                  workload_params: Optional[Dict[str, str]] = None,
+                                  targets: Optional[List[Dict[str, Any]]] = None) -> tuple[bool, Optional[Dict]]:
+        """Run concurrent priority workloads across multiple devices/namespaces."""
+        name = f"multi_qd{high_iodepth}_{label}" if label else f"multi_qd{high_iodepth}"
+        params = {
+            "high_iodepth": high_iodepth,
+            "high_numjobs": high_numjobs,
+            "normal_iodepth": normal_iodepth,
+            "normal_numjobs": normal_numjobs,
+            "runtime": runtime,
+            "ramp_time": ramp_time,
+            "targets": targets or [{"name": "target0", "path": self.device,
+                                    "high": True, "normal": True}],
+        }
+        if cpus_allowed:
+            params["cpus_allowed"] = cpus_allowed
+        if workload_params:
+            params.update(workload_params)
+        return self._run_job(
+            name=name,
+            template="multi_device_workload.fio.j2",
             params=params,
             iteration=iteration,
         )

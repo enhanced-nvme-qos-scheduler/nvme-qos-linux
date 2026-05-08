@@ -7,6 +7,8 @@ from typing import Dict, Any, Optional, List
 
 HIGH_PRIO_JOB_NAMES = frozenset({"high-prio-reads"})
 NORMAL_PRIO_JOB_NAMES = frozenset({"normal-prio-writes"})
+HIGH_PRIO_JOB_PREFIX = "high-prio-reads-"
+NORMAL_PRIO_JOB_PREFIX = "normal-prio-writes-"
 
 
 @dataclass
@@ -127,9 +129,9 @@ def extract_fio_metrics(fio_json: Dict[str, Any]) -> FioMetrics:
     normal_prio_jobs = []
 
     for jm in jobs:
-        if jm.job_name in HIGH_PRIO_JOB_NAMES:
+        if jm.job_name in HIGH_PRIO_JOB_NAMES or jm.job_name.startswith(HIGH_PRIO_JOB_PREFIX):
             high_prio_jobs.append(jm)
-        elif jm.job_name in NORMAL_PRIO_JOB_NAMES:
+        elif jm.job_name in NORMAL_PRIO_JOB_NAMES or jm.job_name.startswith(NORMAL_PRIO_JOB_PREFIX):
             normal_prio_jobs.append(jm)
         else:
             raise ValueError(
@@ -147,18 +149,18 @@ def extract_fio_metrics(fio_json: Dict[str, Any]) -> FioMetrics:
     total_bw = sum(j.bw_bytes for j in jobs)
     avg_cpu = sum(j.usr_cpu + j.sys_cpu for j in jobs) / len(jobs) if jobs else 0
 
-    # Parse disk_util from top-level fio JSON (first entry if available)
+    # Parse disk_util from top-level fio JSON. Multi-device runs can report
+    # multiple entries, so sum counters and retain the max utilization.
     disk_util = None
     disk_util_list = fio_json.get("disk_util", [])
     if disk_util_list:
-        du = disk_util_list[0]
         disk_util = {
-            "name": du.get("name", ""),
-            "read_ios": du.get("read_ios", 0),
-            "write_ios": du.get("write_ios", 0),
-            "read_merges": du.get("read_merges", 0),
-            "write_merges": du.get("write_merges", 0),
-            "util_pct": du.get("util", 0.0),
+            "name": ",".join(du.get("name", "") for du in disk_util_list),
+            "read_ios": sum(du.get("read_ios", 0) for du in disk_util_list),
+            "write_ios": sum(du.get("write_ios", 0) for du in disk_util_list),
+            "read_merges": sum(du.get("read_merges", 0) for du in disk_util_list),
+            "write_merges": sum(du.get("write_merges", 0) for du in disk_util_list),
+            "util_pct": max(du.get("util", 0.0) for du in disk_util_list),
         }
 
     return FioMetrics(

@@ -3,7 +3,7 @@
 
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 
 DEBUGFS_BASE = Path("/sys/kernel/debug/nvme_qos")
@@ -234,6 +234,35 @@ class QoSKernelStats:
 
         return (f"{disp_str} {enq_str} kicks={_si(kicks)}/{_si(kick_empty)} "
                 f"refill={_si(refills)} throttle={_si(throttle)} fair={fair_str}")
+
+
+class MultiQoSKernelStats:
+    """Aggregate QoS debugfs counters across multiple controllers."""
+
+    def __init__(self, controllers: List[str]):
+        self.controllers = sorted(set(controllers))
+        self._stats = [QoSKernelStats(c) for c in self.controllers]
+
+    @property
+    def available(self) -> bool:
+        return bool(self._stats) and all(s.available for s in self._stats)
+
+    def read_aggregate(self) -> Optional[Dict[str, int]]:
+        totals = {name: 0 for name in COUNTER_NAMES}
+        for stats in self._stats:
+            data = stats.read_aggregate()
+            if data is None:
+                return None
+            for name in COUNTER_NAMES:
+                totals[name] += data.get(name, 0)
+        return totals
+
+    def reset(self) -> bool:
+        ok = True
+        for stats in self._stats:
+            if not stats.reset():
+                ok = False
+        return ok
 
 
 def _si(n: int) -> str:
