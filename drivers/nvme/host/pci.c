@@ -4501,6 +4501,7 @@ static struct nvme_dev *nvme_pci_alloc_dev(struct pci_dev *pdev,
 	dev->qos_bypass_enter_ms = qos_bypass_enter_ms;
 	dev->qos_bypass_exit_ms = qos_bypass_exit_ms;
 	dev->qos_burst_window = qos_burst_window;
+	dev->qos_max_depth = 0;
 #endif
 
 	return dev;
