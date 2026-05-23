@@ -1,0 +1,83 @@
+@startuml
+title High-Level Architecture: NVMe QoS Scheduler
+
+skinparam componentStyle rectangle
+
+' ========================
+' User Space
+' ========================
+package "User Space" {
+    [Applications]
+}
+
+' ========================
+' Kernel Space - Block Layer
+' ========================
+package "Linux Kernel" {
+
+    package "Block Layer (blk-mq)" {
+        [Request Queue]
+    }
+
+    package "NVMe Driver (QoS Enabled)" {
+
+        [Submission Path\n(queue_rq)]
+        [Priority Classifier]
+        [Per-Queue Scheduler]
+        [WRR Dispatcher]
+        [Bypass Controller]
+        [Completion Path\n(nvme_qos_kick)]
+
+        [Namespace Policy Store]
+        [Device Control Plane]
+
+    }
+}
+
+' ========================
+' Hardware
+' ========================
+package "Hardware" {
+    [NVMe Controller]
+    [Submission Queue (SQ)]
+    [Completion Queue (CQ)]
+}
+
+' ========================
+' Flow: Submission
+' ========================
+[Applications] --> [Request Queue]
+
+[Request Queue] --> [Submission Path\n(queue_rq)]
+
+[Submission Path\n(queue_rq)] --> [Priority Classifier]
+[Priority Classifier] --> [Per-Queue Scheduler]
+
+[Per-Queue Scheduler] --> [WRR Dispatcher]
+
+[Submission Path\n(queue_rq)] --> [Bypass Controller]
+[Bypass Controller] --> [NVMe Controller] : Direct Submit (Bypass)
+
+[WRR Dispatcher] --> [Submission Queue (SQ)]
+
+' ========================
+' Hardware Processing
+' ========================
+[Submission Queue (SQ)] --> [NVMe Controller]
+[NVMe Controller] --> [Completion Queue (CQ)]
+
+' ========================
+' Completion Flow
+' ========================
+[Completion Queue (CQ)] --> [Completion Path\n(nvme_qos_kick)]
+[Completion Path\n(nvme_qos_kick)] --> [Request Queue]
+
+' ========================
+' Control / Config Paths
+' ========================
+[Device Control Plane] --> [Submission Path\n(queue_rq)]
+[Device Control Plane] --> [WRR Dispatcher]
+
+[Namespace Policy Store] --> [Priority Classifier]
+
+@enduml
