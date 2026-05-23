@@ -68,7 +68,9 @@ function run_checkpatch() {
 	log=$(echo "$patch" | ./scripts/checkpatch.pl --no-tree --no-signoff - 2>&1)
 	set -e
 
-	local errors=$(echo "$log" | grep -oP 'total: \K[0-9]+(?= errors)' || echo "0")
+	local errors
+	errors=$(echo "$log" | sed -n 's/.*total: \([0-9][0-9]*\) errors.*/\1/p' | tail -1)
+	errors=${errors:-0}
 
 	if [[ "$errors" -eq 0 ]]; then
 		echo -e "[${GREEN}ok${NC}]"
@@ -86,6 +88,7 @@ ALLOWED_PATHS=(
 	'^\.github/'
 	'^README\.md$'
 	'^CONTRIBUTING\.md$'
+	'^Documentation/images/'
 	'^scripts/lint\.sh$'
 	'^scripts/install-hooks\.sh$'
 	'^scripts/pre-commit$'
